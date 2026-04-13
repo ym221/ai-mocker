@@ -161,39 +161,34 @@ export default async function mockRouter(app: FastifyInstance) {
       return reply.status(500).send({ success: false, message: `Controller load error: ${msg}` });
     }
 
-    // 6. Call handler
+    // 6. Call handler within mockContext so BaseModel knows the userId
     try {
-      let result: unknown;
       const query = request.query as Record<string, string>;
       const body = request.body as Record<string, unknown>;
 
-      switch (matchedEndpoint.type) {
-        case 'list':
-          result = ctrl.list(query);
-          break;
-        case 'detail':
-          result = ctrl.getById(matchedParams.id);
-          break;
-        case 'create':
-          result = ctrl.create(body);
-          break;
-        case 'update':
-          result = ctrl.update(matchedParams.id, body);
-          break;
-        case 'delete':
-          result = ctrl.remove(matchedParams.id);
-          break;
-        case 'custom': {
-          const handlerName = matchedEndpoint.handler || matchedEndpoint.name;
-          if (!ctrl[handlerName]) {
-            return reply.status(500).send({ success: false, message: `Handler "${handlerName}" not found in controller` });
+      const result = mockContext.run({ userId }, () => {
+        switch (matchedEndpoint!.type) {
+          case 'list':
+            return ctrl.list(query);
+          case 'detail':
+            return ctrl.getById(matchedParams.id);
+          case 'create':
+            return ctrl.create(body);
+          case 'update':
+            return ctrl.update(matchedParams.id, body);
+          case 'delete':
+            return ctrl.remove(matchedParams.id);
+          case 'custom': {
+            const handlerName = matchedEndpoint!.handler || matchedEndpoint!.name;
+            if (!ctrl[handlerName]) {
+              throw new Error(`Handler "${handlerName}" not found in controller`);
+            }
+            return ctrl[handlerName](body, query, matchedParams);
           }
-          result = ctrl[handlerName](body, query, matchedParams);
-          break;
+          default:
+            throw new Error(`Unknown endpoint type: ${matchedEndpoint!.type}`);
         }
-        default:
-          return reply.status(500).send({ success: false, message: `Unknown endpoint type: ${matchedEndpoint.type}` });
-      }
+      });
 
       // Set response headers
       reply.header('Content-Type', 'application/json; charset=utf-8');

@@ -39,6 +39,10 @@ export async function runAgent({ sessionId, userId, userMessages }: RunAgentOpti
     }
   }
 
+  if (!apiKey) {
+    throw new Error('AI Provider API Key is not configured. Please go to Settings → AI Providers to add your API key.');
+  }
+
   // Create AI model
   const openai = createOpenAI({
     apiKey,

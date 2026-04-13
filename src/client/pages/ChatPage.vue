@@ -69,23 +69,13 @@ async function handleSend(message: string) {
       signal: abortController.value.signal,
     });
 
-    if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.message || 'Chat request failed');
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || `HTTP ${response.status}: ${response.statusText}`);
     }
 
-    // Stream response
-    const reader = response.body?.getReader();
-    const decoder = new TextDecoder();
-
-    if (reader) {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        messages.value[assistantIndex].content += chunk;
-      }
-    }
+    messages.value[assistantIndex].content = data.data || '[No response from AI]';
   } catch (err) {
     if ((err as Error).name === 'AbortError') {
       messages.value[assistantIndex].content += '\n\n[Generation stopped]';

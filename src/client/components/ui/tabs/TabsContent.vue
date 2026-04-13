@@ -10,7 +10,7 @@ const props = defineProps<TabsContentProps & { class?: HTMLAttributes['class'] }
   <TabsContent
     v-bind="{ ...props, class: undefined }"
     :class="cn(
-      'focus-visible:border-ring focus-visible:ring-ring/50 mt-2 outline-none focus-visible:ring-[3px]',
+      'focus-visible:border-ring focus-visible:ring-ring/50 mt-2 outline-none focus-visible:ring-2',
       props.class,
     )"
   >

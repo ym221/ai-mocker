@@ -12,7 +12,7 @@ const props = defineProps<PaginationListItemProps & { class?: HTMLAttributes['cl
     v-bind="{ ...props, class: undefined }"
     :class="cn(
       buttonVariants({ variant: 'outline' }),
-      'size-9 p-0',
+      'h-9 w-9 p-0',
       props.class,
       'data-[selected]:bg-accent data-[selected]:text-accent-foreground',
     )"

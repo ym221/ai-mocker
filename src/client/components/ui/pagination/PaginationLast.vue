@@ -13,12 +13,12 @@ const props = defineProps<PaginationLastProps & { class?: HTMLAttributes['class'
     v-bind="{ ...props, class: undefined }"
     :class="cn(
       buttonVariants({ variant: 'outline' }),
-      'size-9 p-0',
+      'h-9 w-9 p-0',
       props.class,
     )"
   >
     <slot>
-      <ChevronsRight class="size-4" />
+      <ChevronsRight class="h-4 w-4" />
     </slot>
   </PaginationLast>
 </template>

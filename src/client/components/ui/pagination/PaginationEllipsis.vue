@@ -10,10 +10,10 @@ const props = defineProps<PaginationEllipsisProps & { class?: HTMLAttributes['cl
 <template>
   <PaginationEllipsis
     v-bind="{ ...props, class: undefined }"
-    :class="cn('flex size-9 items-center justify-center', props.class)"
+    :class="cn('flex h-9 w-9 items-center justify-center', props.class)"
   >
     <slot>
-      <Ellipsis class="size-4" />
+      <Ellipsis class="h-4 w-4" />
     </slot>
     <span class="sr-only">More pages</span>
   </PaginationEllipsis>

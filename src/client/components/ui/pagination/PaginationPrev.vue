@@ -13,12 +13,12 @@ const props = defineProps<PaginationPrevProps & { class?: HTMLAttributes['class'
     v-bind="{ ...props, class: undefined }"
     :class="cn(
       buttonVariants({ variant: 'outline' }),
-      'size-9 p-0',
+      'h-9 w-9 p-0',
       props.class,
     )"
   >
     <slot>
-      <ChevronLeft class="size-4" />
+      <ChevronLeft class="h-4 w-4" />
     </slot>
   </PaginationPrev>
 </template>

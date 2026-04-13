@@ -10,6 +10,7 @@ import presetRoutes from './api/presets.js';
 import sessionRoutes from './api/sessions.js';
 import moduleRoutes from './api/modules.js';
 import chatRoutes from './api/chat.js';
+import mockRouter from './core/mock-router.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -66,6 +67,7 @@ async function start() {
     await app.register(sessionRoutes);
     await app.register(moduleRoutes);
     await app.register(chatRoutes);
+    await app.register(mockRouter);
 
     await app.listen({ port: PORT, host: HOST });
     console.log(`MockForge server running at http://${HOST}:${PORT}`);

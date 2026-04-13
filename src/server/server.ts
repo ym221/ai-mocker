@@ -5,6 +5,11 @@ import { encrypt } from './core/encryption.js';
 import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import authRoutes from './api/auth.js';
+import providerRoutes from './api/providers.js';
+import presetRoutes from './api/presets.js';
+import sessionRoutes from './api/sessions.js';
+import moduleRoutes from './api/modules.js';
+import chatRoutes from './api/chat.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -56,6 +61,11 @@ async function start() {
 
     // Register API routes
     await app.register(authRoutes);
+    await app.register(providerRoutes);
+    await app.register(presetRoutes);
+    await app.register(sessionRoutes);
+    await app.register(moduleRoutes);
+    await app.register(chatRoutes);
 
     await app.listen({ port: PORT, host: HOST });
     console.log(`MockForge server running at http://${HOST}:${PORT}`);

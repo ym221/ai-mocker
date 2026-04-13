@@ -1,0 +1,52 @@
+<script setup lang="ts">
+import { ref, watch, nextTick } from 'vue';
+import MessageBubble from './MessageBubble.vue';
+
+const props = defineProps<{
+  messages: { role: string; content: string }[];
+}>();
+
+const listRef = ref<HTMLDivElement | null>(null);
+const autoScroll = ref(true);
+
+function scrollToBottom() {
+  if (listRef.value && autoScroll.value) {
+    nextTick(() => {
+      listRef.value!.scrollTop = listRef.value!.scrollHeight;
+    });
+  }
+}
+
+function handleScroll() {
+  if (!listRef.value) return;
+  const { scrollTop, scrollHeight, clientHeight } = listRef.value;
+  autoScroll.value = scrollHeight - scrollTop - clientHeight < 100;
+}
+
+watch(() => props.messages.length, scrollToBottom);
+watch(() => props.messages[props.messages.length - 1]?.content, scrollToBottom);
+</script>
+
+<template>
+  <div
+    ref="listRef"
+    @scroll="handleScroll"
+    class="flex-1 overflow-y-auto px-4"
+  >
+    <div class="max-w-3xl mx-auto">
+      <div v-if="messages.length === 0" class="flex items-center justify-center h-full min-h-[400px]">
+        <div class="text-center text-muted-foreground">
+          <h2 class="text-2xl font-bold mb-2">MockForge</h2>
+          <p>Describe the API you want to generate</p>
+        </div>
+      </div>
+
+      <MessageBubble
+        v-for="(msg, index) in messages"
+        :key="index"
+        :role="msg.role as 'user' | 'assistant'"
+        :content="msg.content"
+      />
+    </div>
+  </div>
+</template>

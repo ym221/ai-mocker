@@ -25,9 +25,9 @@ export async function runAgent({ sessionId, userId, userMessages }: RunAgentOpti
   if (!session) throw new Error('Session not found');
 
   // Load provider
-  const providerId = session.providerId || 1; // default to first provider
+  const providerId = session.providerId || 1;
   const provider = db.select().from(providers).where(eq(providers.id, providerId)).get();
-  if (!provider) throw new Error('AI Provider not configured');
+  if (!provider) throw new Error('AI Provider not configured. Please go to Settings to add a provider.');
 
   // Decrypt API key
   let apiKey = '';
@@ -43,10 +43,12 @@ export async function runAgent({ sessionId, userId, userMessages }: RunAgentOpti
     throw new Error('AI Provider API Key is not configured. Please go to Settings → AI Providers to add your API key.');
   }
 
-  // Create AI model
+  // Create AI model — use compatibility mode for OpenAI-compatible providers (e.g. 豆包/DeepSeek)
+  // compatibility: 'compatible' uses /chat/completions instead of /responses
   const openai = createOpenAI({
     apiKey,
     baseURL: provider.baseUrl || undefined,
+    compatibility: 'compatible',
   });
   const model = openai(session.model || provider.defaultModel);
 
@@ -88,6 +90,17 @@ export async function runAgent({ sessionId, userId, userMessages }: RunAgentOpti
     ...userMessages,
   ];
 
+  // Persist user messages immediately (prevent loss on stream interruption)
+  for (const msg of userMessages) {
+    if (msg.role === 'user') {
+      db.insert(messages).values({
+        sessionId,
+        role: 'user',
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+      }).run();
+    }
+  }
+
   // Build tools with userId injection
   const tools = buildTools(userId);
 
@@ -99,18 +112,7 @@ export async function runAgent({ sessionId, userId, userMessages }: RunAgentOpti
     tools,
     maxSteps: 10,
     onFinish: async ({ response }) => {
-      // Persist user message
-      for (const msg of userMessages) {
-        if (msg.role === 'user') {
-          db.insert(messages).values({
-            sessionId,
-            role: 'user',
-            content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-          }).run();
-        }
-      }
-
-      // Persist assistant messages
+      // Persist assistant messages (after stream completes)
       for (const msg of response.messages) {
         if (msg.role === 'assistant') {
           const content = Array.isArray(msg.content)

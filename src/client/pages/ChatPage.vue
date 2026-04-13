@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, computed } from 'vue';
+import { ref, onMounted, watch, computed, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { useChat } from '@ai-sdk/vue';
 import { useChatStore } from '../stores/chat';
 import { useAuthStore } from '../stores/auth';
 import { toast } from 'vue-sonner';
@@ -13,9 +14,44 @@ const router = useRouter();
 const chatStore = useChatStore();
 const authStore = useAuthStore();
 
-const messages = ref<{ role: string; content: string }[]>([]);
-const isLoading = ref(false);
-const abortController = ref<AbortController | null>(null);
+// useChat from @ai-sdk/vue — manages SSE stream, messages, tools automatically
+const {
+  messages: chatMessages,
+  input,
+  isLoading,
+  error: chatError,
+  append,
+  stop,
+  setMessages,
+} = useChat({
+  api: '/api/chat',
+  streamProtocol: 'text',
+  headers: () => ({
+    Authorization: `Bearer ${authStore.token}`,
+  }),
+  body: () => ({
+    sessionId: chatStore.activeSessionId,
+  }),
+  onError: (err) => {
+    toast.error(err.message || 'Failed to get AI response');
+  },
+  onFinish: () => {
+    // Auto-title from first user message
+    const userMsgs = chatMessages.value.filter(m => m.role === 'user');
+    if (userMsgs.length === 1 && chatStore.activeSessionId) {
+      const title = userMsgs[0].content.slice(0, 30) + (userMsgs[0].content.length > 30 ? '...' : '');
+      chatStore.updateSessionTitle(chatStore.activeSessionId, title);
+    }
+  },
+});
+
+// Convert useChat messages to the format ChatPanel expects
+const displayMessages = computed(() =>
+  chatMessages.value.map(m => ({
+    role: m.role,
+    content: m.content,
+  }))
+);
 
 const activeSession = computed(() =>
   chatStore.sessions.find(s => s.id === chatStore.activeSessionId)
@@ -24,12 +60,17 @@ const activeSession = computed(() =>
 async function loadMessages(sessionId: string) {
   try {
     const data = await chatStore.loadSession(sessionId);
-    messages.value = (data.messages || []).map(m => ({
-      role: m.role,
-      content: m.content || '',
-    }));
+    if (data.messages?.length) {
+      setMessages(data.messages.map(m => ({
+        id: String(m.id),
+        role: m.role as 'user' | 'assistant',
+        content: m.content || '',
+      })));
+    } else {
+      setMessages([]);
+    }
   } catch {
-    messages.value = [];
+    setMessages([]);
   }
 }
 
@@ -37,65 +78,19 @@ async function handleSend(message: string) {
   if (!chatStore.activeSessionId) {
     const session = await chatStore.createSession();
     router.replace(`/chat/${session.id}`);
+    await nextTick();
   }
 
-  // Add user message to UI immediately
-  messages.value.push({ role: 'user', content: message });
-
-  // Auto-title from first message
-  if (messages.value.filter(m => m.role === 'user').length === 1) {
-    const title = message.slice(0, 30) + (message.length > 30 ? '...' : '');
-    chatStore.updateSessionTitle(chatStore.activeSessionId!, title);
-  }
-
-  isLoading.value = true;
-  abortController.value = new AbortController();
-
-  // Add empty assistant message placeholder
-  messages.value.push({ role: 'assistant', content: '' });
-  const assistantIndex = messages.value.length - 1;
-
-  try {
-    const response = await fetch('/api/chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authStore.token}`,
-      },
-      body: JSON.stringify({
-        sessionId: chatStore.activeSessionId,
-        messages: [{ role: 'user', content: message }],
-      }),
-      signal: abortController.value.signal,
-    });
-
-    const data = await response.json();
-
-    if (!response.ok || !data.success) {
-      throw new Error(data.message || `HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    messages.value[assistantIndex].content = data.data || '[No response from AI]';
-  } catch (err) {
-    if ((err as Error).name === 'AbortError') {
-      messages.value[assistantIndex].content += '\n\n[Generation stopped]';
-    } else {
-      toast.error((err as Error).message || 'Failed to get AI response');
-      messages.value[assistantIndex].content = 'Error: ' + (err as Error).message;
-    }
-  } finally {
-    isLoading.value = false;
-    abortController.value = null;
-  }
+  append({ role: 'user', content: message });
 }
 
 function handleStop() {
-  abortController.value?.abort();
+  stop();
 }
 
 async function handleNewChat() {
   const session = await chatStore.createSession();
-  messages.value = [];
+  setMessages([]);
   router.push(`/chat/${session.id}`);
 }
 
@@ -110,7 +105,7 @@ async function handleDeleteSession(id: string) {
   if (chatStore.sessions.length > 0) {
     await handleSelectSession(chatStore.sessions[0].id);
   } else {
-    messages.value = [];
+    setMessages([]);
     router.push('/chat');
   }
 }
@@ -140,7 +135,7 @@ watch(() => route.params.sessionId, async (newId) => {
 
 <template>
   <div class="flex h-full">
-    <!-- Session sidebar (inside chat) -->
+    <!-- Session sidebar -->
     <div class="w-56 border-r border-border bg-muted/30 hidden md:flex flex-col">
       <div class="p-3">
         <Button size="sm" class="w-full" @click="handleNewChat">
@@ -172,7 +167,7 @@ watch(() => route.params.sessionId, async (newId) => {
     <!-- Chat panel -->
     <div class="flex-1">
       <ChatPanel
-        :messages="messages"
+        :messages="displayMessages"
         :loading="isLoading"
         @send="handleSend"
         @stop="handleStop"

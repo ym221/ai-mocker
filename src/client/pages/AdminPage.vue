@@ -1,11 +1,87 @@
 <script setup lang="ts">
+import { ref, onMounted } from 'vue';
+import { useApi } from '../composables/use-api';
+import { toast } from 'vue-sonner';
+import { Button } from '../components/ui/button';
+import { Shield } from 'lucide-vue-next';
+
+const api = useApi();
+const users = ref<any[]>([]);
+
+async function fetchUsers() {
+  try {
+    const res = await api.get<{ success: boolean; data: any[] }>('/api/users');
+    users.value = res.data;
+  } catch { /* handled by useApi */ }
+}
+
+async function toggleActive(user: any) {
+  try {
+    await api.put(`/api/users/${user.id}`, { isActive: user.isActive ? 0 : 1 });
+    toast.success(`User ${user.isActive ? 'disabled' : 'enabled'}`);
+    await fetchUsers();
+  } catch { /* handled by useApi */ }
+}
+
+async function toggleRole(user: any) {
+  const newRole = user.role === 'admin' ? 'user' : 'admin';
+  try {
+    await api.put(`/api/users/${user.id}`, { role: newRole });
+    toast.success(`Role changed to ${newRole}`);
+    await fetchUsers();
+  } catch { /* handled by useApi */ }
+}
+
+onMounted(fetchUsers);
 </script>
 
 <template>
-  <div class="flex items-center justify-center h-full">
-    <div class="text-center text-muted-foreground">
-      <h2 class="text-2xl font-bold mb-2">Admin Panel</h2>
-      <p>Admin page will be implemented in Step 22</p>
+  <div class="max-w-4xl mx-auto p-6">
+    <div class="flex items-center gap-2 mb-6">
+      <Shield class="w-6 h-6" />
+      <h1 class="text-2xl font-bold">Admin Panel</h1>
+    </div>
+
+    <h2 class="text-lg font-semibold mb-4">User Management</h2>
+
+    <div class="border border-border rounded-lg overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-muted">
+          <tr>
+            <th class="px-4 py-2 text-left">ID</th>
+            <th class="px-4 py-2 text-left">Username</th>
+            <th class="px-4 py-2 text-left">Role</th>
+            <th class="px-4 py-2 text-left">Status</th>
+            <th class="px-4 py-2 text-left">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="u in users" :key="u.id" class="border-t border-border">
+            <td class="px-4 py-2">{{ u.id }}</td>
+            <td class="px-4 py-2">{{ u.username }}</td>
+            <td class="px-4 py-2">
+              <span class="text-xs px-2 py-0.5 rounded-full"
+                :class="u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-700'">
+                {{ u.role }}
+              </span>
+            </td>
+            <td class="px-4 py-2">
+              <span class="text-xs px-2 py-0.5 rounded-full"
+                :class="u.isActive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'">
+                {{ u.isActive ? 'Active' : 'Disabled' }}
+              </span>
+            </td>
+            <td class="px-4 py-2 space-x-2">
+              <Button size="sm" variant="outline" @click="toggleRole(u)">
+                {{ u.role === 'admin' ? 'Demote' : 'Promote' }}
+              </Button>
+              <Button size="sm" variant="outline" @click="toggleActive(u)">
+                {{ u.isActive ? 'Disable' : 'Enable' }}
+              </Button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </div>
 </template>

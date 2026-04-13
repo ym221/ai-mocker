@@ -11,6 +11,9 @@ import sessionRoutes from './api/sessions.js';
 import moduleRoutes from './api/modules.js';
 import chatRoutes from './api/chat.js';
 import uploadRoutes from './api/upload.js';
+import dataRoutes from './api/data.js';
+import testRoutes from './api/test.js';
+import userRoutes from './api/users.js';
 import mockRouter from './core/mock-router.js';
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -69,6 +72,9 @@ async function start() {
     await app.register(moduleRoutes);
     await app.register(chatRoutes);
     await app.register(uploadRoutes);
+    await app.register(dataRoutes);
+    await app.register(testRoutes);
+    await app.register(userRoutes);
     await app.register(mockRouter);
 
     await app.listen({ port: PORT, host: HOST });

@@ -5,6 +5,9 @@ import { registerGetOpenApiTool } from './get-openapi.js';
 import { registerGetMockAccessLogTool } from './get-mock-access-log.js';
 import { registerGetModuleHealthTool } from './get-module-health.js';
 import { registerDiffWithOpenApiTool } from './diff-with-openapi.js';
+import { registerDeleteModuleTool } from './delete-module.js';
+import { registerRunTestTool } from './run-test.js';
+import { registerManageDataTool } from './manage-data.js';
 
 /** 注册所有 MCP 工具。 */
 export function registerMcpTools(server: McpServer): void {
@@ -15,4 +18,8 @@ export function registerMcpTools(server: McpServer): void {
   registerGetMockAccessLogTool(server);
   registerGetModuleHealthTool(server);
   registerDiffWithOpenApiTool(server);
+  // Write tools (lightweight — directly wrap existing Agent tools)
+  registerDeleteModuleTool(server);
+  registerRunTestTool(server);
+  registerManageDataTool(server);
 }

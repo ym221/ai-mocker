@@ -190,3 +190,133 @@ test.describe('MCP v2 — diff_with_openapi', () => {
     await client.close();
   });
 });
+
+// =============== Task 2.4：delete_module / run_test / manage_data ===============
+
+test.describe('MCP v2 — 轻量写工具', () => {
+  test('M19 manage_data bulk_generate + list 基础往返', async () => {
+    const key = await generateApiKey();
+    const client = await connect(key);
+
+    // clear first
+    await client.callTool({ name: 'manage_data', arguments: { action: 'clear', moduleName: 'user' } });
+
+    // bulk generate 5 条
+    const gen = await client.callTool({
+      name: 'manage_data',
+      arguments: { action: 'bulk_generate', moduleName: 'user', count: 5 },
+    });
+    expect((gen as any).isError).toBeFalsy();
+
+    // list
+    const listed = await client.callTool({
+      name: 'manage_data',
+      arguments: { action: 'list', moduleName: 'user', pageSize: 10 },
+    });
+    const sc = (listed as any).structuredContent as { result: any };
+    expect(sc.result.total).toBeGreaterThanOrEqual(5);
+
+    await client.close();
+  });
+
+  test('M20 manage_data insert + update + delete 完整 CRUD', async () => {
+    const key = await generateApiKey();
+    const client = await connect(key);
+
+    // clear
+    await client.callTool({ name: 'manage_data', arguments: { action: 'clear', moduleName: 'user' } });
+
+    // insert
+    const ins = await client.callTool({
+      name: 'manage_data',
+      arguments: {
+        action: 'insert',
+        moduleName: 'user',
+        data: { username: 'mcp_crud', email: 'm@c.com', password: 'x' },
+      },
+    });
+    if ((ins as any).isError) {
+      throw new Error(`insert failed: ${(ins as any).content?.[0]?.text}`);
+    }
+    const insResult = (ins as any).structuredContent?.result as any;
+    expect(insResult, `insert structuredContent missing; raw=${JSON.stringify(ins)}`).toBeTruthy();
+    const newId = insResult.id;
+    expect(newId).toBeGreaterThan(0);
+
+    // update
+    const upd = await client.callTool({
+      name: 'manage_data',
+      arguments: {
+        action: 'update',
+        moduleName: 'user',
+        id: newId,
+        data: { role: 'admin' },
+      },
+    });
+    expect((upd as any).isError).toBeFalsy();
+
+    // delete
+    const del = await client.callTool({
+      name: 'manage_data',
+      arguments: { action: 'delete', moduleName: 'user', id: newId },
+    });
+    expect((del as any).isError).toBeFalsy();
+
+    await client.close();
+  });
+
+  test('M21 run_test 跑 user 模块回归', async () => {
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const r = await client.callTool({ name: 'run_test', arguments: { moduleName: 'user' } });
+    const sc = (r as any).structuredContent as { passed: number; total: number; allPassed: boolean };
+    // user fixture 的 test.ts 应该全绿
+    expect(sc.total).toBeGreaterThan(0);
+    expect(sc.allPassed).toBe(true);
+    await client.close();
+  });
+
+  test('M22 delete_module 对不存在模块返回友好错误', async () => {
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const r = await client.callTool({
+      name: 'delete_module',
+      arguments: { moduleName: 'absolutely-does-not-exist' },
+    });
+    expect((r as any).isError).toBe(true);
+    await client.close();
+  });
+
+  test('M23 delete_module 实际删除（造一个临时模块再删）', async () => {
+    // 通过直接写 DB 造一个最小模块（无文件，只用 modules 表记录 + delete 验证 DB 清理）
+    const Database = (await import('better-sqlite3')).default;
+    const { resolve } = await import('path');
+    const db = new Database(resolve(process.cwd(), 'data', 'mockforge.db'));
+    const tmpName = 'mcp_tmp_delete_target';
+    try {
+      db.prepare('DELETE FROM modules WHERE name = ? AND user_id = ?').run(tmpName, 1);
+      db.prepare(
+        'INSERT INTO modules (name, user_id, display_name, base_path, status) VALUES (?, ?, ?, ?, ?)'
+      ).run(tmpName, 1, 'tmp', `/mock/${tmpName}`, 'active');
+    } finally {
+      db.close();
+    }
+
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const r = await client.callTool({ name: 'delete_module', arguments: { moduleName: tmpName } });
+    expect((r as any).isError).toBeFalsy();
+    const sc = (r as any).structuredContent as { deleted: boolean };
+    expect(sc.deleted).toBe(true);
+    await client.close();
+
+    // 验证 DB 里确实删了
+    const db2 = new Database(resolve(process.cwd(), 'data', 'mockforge.db'));
+    try {
+      const row = db2.prepare('SELECT id FROM modules WHERE name = ? AND user_id = ?').get(tmpName, 1);
+      expect(row).toBeFalsy();
+    } finally {
+      db2.close();
+    }
+  });
+});

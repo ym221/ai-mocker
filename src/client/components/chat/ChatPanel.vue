@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import MessageList from './MessageList.vue';
 import ChatInput from './ChatInput.vue';
-import type { DisplayMessage } from '../../stores/chat';
+import SessionMetaBar from './SessionMetaBar.vue';
+import { useChatStore, type DisplayMessage } from '../../stores/chat';
 
 defineProps<{
   messages: DisplayMessage[];
@@ -12,11 +14,18 @@ defineEmits<{
   send: [message: string];
   stop: [];
 }>();
+
+const chatStore = useChatStore();
+const activeSession = computed(() => {
+  const id = chatStore.activeSessionId;
+  return id ? chatStore.sessions.find(s => s.id === id) ?? null : null;
+});
 </script>
 
 <template>
   <div class="flex flex-col h-full">
     <MessageList :messages="messages" />
+    <SessionMetaBar :session="activeSession" />
     <ChatInput
       :loading="loading"
       @send="$emit('send', $event)"

@@ -97,3 +97,96 @@ test.describe('MCP v2 — 只读增强工具', () => {
     await client.close();
   });
 });
+
+// =============== Task 2.3：diff_with_openapi ===============
+
+test.describe('MCP v2 — diff_with_openapi', () => {
+  test('M15 对齐场景：完整符合 spec 返回 aligned=true', async () => {
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const r = await client.callTool({
+      name: 'diff_with_openapi',
+      arguments: {
+        moduleName: 'user',
+        actualRequest: {
+          method: 'POST',
+          path: '/mock/user',
+          body: { username: 'alice', email: 'a@b.com', password: 'secret' },
+        },
+        actualResponse: {
+          statusCode: 200,
+          body: {
+            success: true,
+            data: { id: 1, username: 'alice', email: 'a@b.com', password: 'secret' },
+          },
+        },
+      },
+    });
+    const sc = (r as any).structuredContent as { aligned: boolean; diffs: any[] };
+    expect(sc.aligned).toBe(true);
+    expect(sc.diffs.length).toBe(0);
+    await client.close();
+  });
+
+  test('M16 缺字段：actual 缺必填 username', async () => {
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const r = await client.callTool({
+      name: 'diff_with_openapi',
+      arguments: {
+        moduleName: 'user',
+        actualRequest: {
+          method: 'POST',
+          path: '/mock/user',
+          body: { email: 'a@b.com', password: 'secret' }, // 缺 username
+        },
+      },
+    });
+    const sc = (r as any).structuredContent as { aligned: boolean; diffs: any[] };
+    expect(sc.aligned).toBe(false);
+    const usernameDiff = sc.diffs.find((d: any) => d.path.includes('username'));
+    expect(usernameDiff).toBeTruthy();
+    expect(usernameDiff.kind).toBe('missing-in-actual');
+    await client.close();
+  });
+
+  test('M17 多字段：actual 多了 spec 没有的字段', async () => {
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const r = await client.callTool({
+      name: 'diff_with_openapi',
+      arguments: {
+        moduleName: 'user',
+        actualRequest: {
+          method: 'POST',
+          path: '/mock/user',
+          body: { username: 'alice', email: 'a@b.com', password: 'x', bonusField: 42 },
+        },
+      },
+    });
+    const sc = (r as any).structuredContent as { aligned: boolean; diffs: any[] };
+    const extra = sc.diffs.find((d: any) => d.path.includes('bonusField'));
+    expect(extra).toBeTruthy();
+    expect(extra.kind).toBe('missing-in-spec');
+    await client.close();
+  });
+
+  test('M18 端点不存在：POST 到 /mock/user/:id 返回 endpoint-not-in-spec', async () => {
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const r = await client.callTool({
+      name: 'diff_with_openapi',
+      arguments: {
+        moduleName: 'user',
+        actualRequest: {
+          method: 'POST', // spec 里 POST 只有 /mock/user，没有 /mock/user/:id
+          path: '/mock/user/999',
+          body: {},
+        },
+      },
+    });
+    const sc = (r as any).structuredContent as { diffs: any[] };
+    expect(sc.diffs.some((d: any) => d.kind === 'endpoint-not-in-spec')).toBe(true);
+    await client.close();
+  });
+});

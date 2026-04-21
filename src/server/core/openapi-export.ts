@@ -51,7 +51,10 @@ export function buildOpenApi(userId: number, moduleName: string): Record<string,
 
   const firstEntityName = meta.entities?.[0]?.name;
   for (const ent of meta.entities || []) {
-    const properties: Record<string, any> = {};
+    const properties: Record<string, any> = {
+      // 所有 Mock 实体都有自增主键 id + 自动 created_at / updated_at
+      id: { type: 'integer', format: 'int64', description: 'Primary key (auto-increment)' },
+    };
     const required: string[] = [];
     for (const f of ent.fields || []) {
       properties[f.name] = {
@@ -60,6 +63,8 @@ export function buildOpenApi(userId: number, moduleName: string): Record<string,
       };
       if (f.required) required.push(f.name);
     }
+    properties.created_at = { type: 'string', format: 'date-time', description: 'Created at' };
+    properties.updated_at = { type: 'string', format: 'date-time', description: 'Updated at' };
     (spec.components.schemas as Record<string, any>)[ent.name] = {
       type: 'object',
       properties,

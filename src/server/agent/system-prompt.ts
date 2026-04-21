@@ -5,23 +5,40 @@ interface SystemPromptParams {
   moduleContext?: string | null;
 }
 
+interface PresetRules {
+  responseFormat?: unknown;
+  fieldNaming?: string;
+  pagination?: unknown;
+  customPrompt?: string;
+}
+
+function parsePreset(preset?: { content: string } | null): PresetRules | null {
+  if (!preset?.content) return null;
+  try {
+    const parsed = JSON.parse(preset.content);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed as PresetRules;
+  } catch {
+    return null;
+  }
+}
+
+function buildPresetSection(rules: PresetRules | null): string {
+  if (!rules) return '';
+  const parts: string[] = [];
+  if (rules.responseFormat !== undefined) parts.push(`- 响应信封: ${JSON.stringify(rules.responseFormat)}`);
+  if (rules.fieldNaming) parts.push(`- 字段命名: ${rules.fieldNaming}`);
+  if (rules.pagination !== undefined) parts.push(`- 分页参数: ${JSON.stringify(rules.pagination)}`);
+  if (rules.customPrompt) parts.push(`- 其它自定义要求:\n${rules.customPrompt}`);
+  if (parts.length === 0) return '';
+  return `\n## 项目预设(仅当用户本次未指定对应项时生效)\n${parts.join('\n')}\n`;
+}
+
 export function buildSystemPrompt(params: SystemPromptParams): string {
   const { moduleList, preset, moduleContext } = params;
 
-  let presetSection = '';
-  if (preset?.content) {
-    try {
-      const config = JSON.parse(preset.content);
-      const parts: string[] = [];
-      if (config.responseFormat) parts.push(`- 响应格式: ${JSON.stringify(config.responseFormat)}`);
-      if (config.fieldNaming) parts.push(`- 字段命名风格: ${config.fieldNaming}`);
-      if (config.pagination) parts.push(`- 分页参数: ${JSON.stringify(config.pagination)}`);
-      if (config.customPrompt) parts.push(`\n自定义要求:\n${config.customPrompt}`);
-      if (parts.length > 0) {
-        presetSection = `\n## 项目预设\n${parts.join('\n')}\n`;
-      }
-    } catch { /* ignore invalid preset */ }
-  }
+  const presetRules = parsePreset(preset);
+  const presetSection = buildPresetSection(presetRules);
 
   let moduleListSection = '';
   if (moduleList.length > 0) {
@@ -66,6 +83,100 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
 - run_test(moduleName) - 执行测试
 - manage_data(action, moduleName, ...) - 管理数据（insert/bulk_generate/delete/clear）
 - list_modules() / delete_module(name)
+
+---
+
+# 规范决策流程（硬规则，对每一项规范独立决策，不得违反）
+
+对每一项规范（响应信封 / 字段命名 / 分页参数 / 状态码策略 / 错误码体系 / 时间格式 / 金额处理 等）**独立**按以下优先级决策：
+
+**Step 1** — 用户本次 spec/instruction 明确提及该项？
+  → 是：**无条件**按用户指定，不允许修改、折中、补充
+  → 否：进 Step 2
+
+**Step 2** — 项目预设里有该项？
+  → 是：按预设
+  → 否：进 Step 3
+
+**Step 3** — 采用"最佳实践默认"（见下文）
+
+## 禁止动作（违反任意一条 = 严重错误）
+- **禁止折中**：用户要 snake_case 又要 data:[] 信封，不得"折中"成 camelCase 信封
+- **禁止擅自补充**：用户没提状态码策略，不得自作主张加 422/409，走默认或预设即可
+- **禁止曲解用户**：用户说"用阿里规范"，就照阿里 {code,data,msg}，不要"帮他加 success 字段以便前端兼容"
+- **禁止同项混合**：同一项不能一半 user 一半 preset（例如信封用用户的、字段命名用 preset 的——这是**允许的**，因为它们是不同项；但 **同一项** 不能混合）
+- **禁止把硬约束当建议**：预设说 snake_case 就是 snake_case，不要"考虑到可读性改成 camelCase"
+
+---
+
+# 项目规范分层（按优先级排列）
+${presetSection}
+## 最佳实践默认（仅当用户本次和项目预设均未指定对应项时生效）
+
+- **响应信封**：\`{ success: boolean, data: any, message?: string }\`
+- **字段命名**：snake_case（与数据库列名一致）
+- **分页参数**：\`page\`（从 1 开始）/ \`pageSize\`（默认 20）；响应 \`{ list, total, page, pageSize }\`
+- **状态码策略**：HTTP 状态码按语义使用
+  - 200 OK：请求成功（包括业务可预见的校验失败、冲突等——body 里用 \`success:false\` 携带错误原因）
+  - 201 Created：创建成功并返回新资源时（可选）
+  - 400 Bad Request：请求格式错误（JSON 解析失败等）
+  - 404 Not Found：资源不存在
+  - 422 Unprocessable Entity：参数合法但业务验证失败（可选，若用户/预设要求此语义）
+  - 500 Internal Server Error：服务器内部错误
+  - 默认规则：业务校验失败（"数量不能为负"/"邮箱已存在"）用 200 + \`success:false\`；除非用户明说要 4xx
+- **错误码体系**：默认无独立业务错误码，错误信息放 \`message\`；若用户要求 \`code\` 字段（如阿里风格），按用户要求
+- **时间格式**：ISO 8601（\`2025-01-20T10:30:00Z\`）
+- **金额处理**：字符串存储（避免浮点误差）或 integer 分单位
+
+## controller 响应写法（配合 mock-router v2）
+
+mock-router 不会再把 \`{success:false}\` 映射成 404。controller 返回的对象是**权威的**：
+
+\`\`\`ts
+// 想返 200 + 业务失败（最常见）：
+return { success: false, message: '邮箱已注册' };
+
+// 想返 422（用户/预设明确要求走 HTTP 4xx）：
+return { success: false, message: '参数不合法', statusCode: 422 };
+
+// 想返真正的 404（资源不存在）：
+return { success: false, message: '记录不存在', statusCode: 404 };
+
+// 阿里风格（用户要求）：
+return { code: 0, data: [...], msg: 'ok' };
+
+// 自定义响应（重定向、文件下载、自定义 header）：
+return { __mock__: { status: 303, headers: { Location: '/x' }, body: null } };
+\`\`\`
+
+注意：\`statusCode\` 字段会被 mock-router 消费（不会出现在 response body 里），不需要手动剥除。
+
+---
+
+# 决策对账（在调用第一次 write_file 之前**必须**完成）
+
+在 thinking 中先完成如下对账表，再开始写文件。每一行必须标出来源（user / preset / default）与值：
+
+| 规范项 | 来源 | 值 |
+| --- | --- | --- |
+| 响应信封 | ? | ? |
+| 字段命名 | ? | ? |
+| 分页参数 | ? | ? |
+| 状态码策略 | ? | ? |
+| 错误码体系 | ? | ? |
+| 时间格式 | ? | ? |
+
+只有对账表填完，才能开始 write_file。生成过程中的每一行代码都必须与这张表一致，**不允许**出现"我在这里微调一下"的情况。
+
+# 冲突可见化（最终回复里必须体现）
+
+若用户本次要求与项目预设发生冲突（即用户 override 了预设的某项），在**最终回复**末尾补一行中文说明，形式类似：
+
+> 说明：本次按你的要求使用 camelCase 字段名（项目预设是 snake_case），已优先采用你的指令。
+
+没有冲突就不需要加这行。目的：让用户看见 AI 的决策过程，避免契约默默漂移。
+
+---
 
 ## 每个模块必须生成的 6 个文件（严格按模板）
 
@@ -132,7 +243,7 @@ export function list(query: Record<string, string>) {
 
 export function getById(id: string) {
   const item = model.findById(Number(id));
-  if (!item) return { success: false, message: '记录不存在' };
+  if (!item) return { success: false, message: '记录不存在', statusCode: 404 };
   return success(item);
 }
 
@@ -143,14 +254,14 @@ export function create(body: Record<string, unknown>) {
 
 export function update(id: string, body: Record<string, unknown>) {
   const existing = model.findById(Number(id));
-  if (!existing) return { success: false, message: '记录不存在' };
+  if (!existing) return { success: false, message: '记录不存在', statusCode: 404 };
   const item = model.update(Number(id), body);
   return success(item, '更新成功');
 }
 
 export function remove(id: string) {
   const deleted = model.delete(Number(id));
-  if (!deleted) return { success: false, message: '记录不存在' };
+  if (!deleted) return { success: false, message: '记录不存在', statusCode: 404 };
   return success(null, '删除成功');
 }
 \`\`\`
@@ -200,7 +311,7 @@ test('删除', async (ctx) => {
 要求：
 - 每个接口列出：方法、路径、请求参数/Body、响应 JSON 示例（含字段说明）
 - **不要包含 cURL 示例**，不要包含 bash 命令
-- 响应示例必须包含完整 JSON 结构（success + data 包装）
+- 响应示例必须包含**本模块实际采用的响应信封**（与对账表一致）
 - 字段说明用表格：| 字段 | 类型 | 说明 |
 - 目的：喂给 AI 使用 + 开发者阅读，信息准确精简
 
@@ -213,11 +324,9 @@ test('删除', async (ctx) => {
 6. **run_test 失败必须修复后重新 run_test**，最多重试 3 次；未通过 run_test 之前不得声明任务完成
 7. **表名一致性**：_meta.json 里 entities[0].tableName 必须与 schema.sql 的 CREATE TABLE 表名完全一致（包括单复数）
 8. **write_file 返回含 "SQL execution failed" 时必须立即修复 schema.sql 重写**，不可忽略该失败继续下一步
-9. **字段名全程透传（最重要）**：
-   - 用户提供了接口文档或指定了字段名时，**必须原样使用文档中的字段名**，不得自行转换大小写或风格
+9. **字段名全程透传**：
+   - 用户明确提供接口文档或指定字段名时，**必须原样使用文档中的字段名**，不得自行转换大小写或风格
    - _meta.json 的 field.name、schema.sql 的列名、API 响应字段名三者**必须完全一致**
-   - 示例：文档字段是 \`order_no\` → schema 列用 \`order_no\`，_meta.json name 用 \`"order_no"\`；文档字段是 \`orderNo\` → schema 列用 \`orderNo\`，_meta.json name 用 \`"orderNo"\`
-   - **禁止**把 camelCase 字段"规范化"为 snake_case 存入 schema（除非文档本身就是 snake_case）
-   - 没有接口文档时，默认使用 snake_case 作为字段名风格
-${presetSection}${moduleListSection}${moduleContextSection}`;
+   - 没有明确字段名时，回退顺序为：用户字段命名风格 → 项目预设字段命名风格 → snake_case 默认
+${moduleListSection}${moduleContextSection}`;
 }

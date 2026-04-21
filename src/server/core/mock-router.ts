@@ -6,6 +6,7 @@ import { mockContext } from './base-model.js';
 import { db } from './database.js';
 import { users } from './schema.js';
 import { eq } from 'drizzle-orm';
+import { recordMockAccess } from './access-log.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -63,6 +64,28 @@ function matchPath(pattern: string, subPath: string): { matched: boolean; params
 
 export default async function mockRouter(app: FastifyInstance) {
   app.all('/mock/*', async (request, reply) => {
+    const startTime = Date.now();
+    const method = request.method.toUpperCase();
+    const fullPath = request.url.split('?')[0];
+
+    let loggedUserId = 0;
+    let loggedModuleName = 'unknown';
+    let loggedResponseBody: unknown = null;
+
+    const finalize = () => {
+      recordMockAccess({
+        userId: loggedUserId,
+        moduleName: loggedModuleName,
+        method,
+        path: fullPath,
+        statusCode: reply.raw.statusCode || 200,
+        durationMs: Date.now() - startTime,
+        requestBody: request.body,
+        responseBody: loggedResponseBody,
+      });
+    };
+    reply.raw.on('close', finalize);
+
     // 0. Determine userId
     const uidHeader = request.headers['x-mock-user'] as string | undefined;
     const uidQuery = (request.query as Record<string, string>)?._uid;
@@ -73,12 +96,14 @@ export default async function mockRouter(app: FastifyInstance) {
       const admin = db.select().from(users).where(eq(users.role, 'admin')).get();
       userId = admin?.id || 1;
     }
+    loggedUserId = userId;
 
     // 1. Parse URL → moduleName + subPath
     const url = (request.params as { '*': string })['*'];
     const parts = url.split('/');
     const moduleName = parts[0];
     const subPath = '/' + parts.slice(1).join('/');
+    if (moduleName) loggedModuleName = moduleName;
 
     if (!moduleName) {
       return reply.status(404).send({ success: false, message: 'Module name required' });
@@ -98,7 +123,6 @@ export default async function mockRouter(app: FastifyInstance) {
     }
 
     // 3. Match endpoint — fixed paths first, then parameterized
-    const method = request.method.toUpperCase();
     let matchedEndpoint: MetaEndpoint | null = null;
     let matchedParams: Record<string, string> = {};
 
@@ -195,13 +219,17 @@ export default async function mockRouter(app: FastifyInstance) {
 
       // Check if result indicates an error
       if (result && typeof result === 'object' && 'success' in result && !(result as { success: boolean }).success) {
+        loggedResponseBody = result;
         return reply.status(404).send(result);
       }
 
+      loggedResponseBody = result;
       return result;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return reply.status(500).send({ success: false, message: `Controller error: ${msg}` });
+      const body = { success: false, message: `Controller error: ${msg}` };
+      loggedResponseBody = body;
+      return reply.status(500).send(body);
     }
   });
 }

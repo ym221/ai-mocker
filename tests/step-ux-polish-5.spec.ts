@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { waitForBackend, getToken, apiRequest, startNewChatSession } from './helpers';
+import { waitForBackend, getToken, apiRequest, startNewChatSession, ensureUserModule } from './helpers';
 
 test.beforeAll(async () => { await waitForBackend(); });
 
@@ -50,22 +50,19 @@ test('T5-02 isGenerating 启发式：存在 modules 时视为已完成', async (
 
 test('T5-03 丢失 mock__1_{entity} 表后，bulk-generate 自动从 schema.sql 重建', async () => {
   const token = await getToken();
-  const { data: modList } = await apiRequest('GET', '/api/modules', token);
-  const target = modList.data?.find((m: any) => m.health === 'healthy');
-  if (!target) { test.skip(true, '无健康模块 fixture'); return; }
+  // 明确使用 'user' fixture（由 helpers.ts ensureUserModule 保证存在且健康 + 无 CHECK 约束）
+  // 不要用"第一个 healthy 模块"，那会被 DB 里其他模块干扰（如 warehouse 有 status CHECK 约束 → 随机生成触发失败）
+  await ensureUserModule(token);
 
-  // drop table (via SQL) — 没有直接 API，我们改为调用 clear 再 bulk-generate，验证 ensureTableExists 副作用无害
-  // Actually: use a dedicated test-only endpoint? We don't have one.
-  // Instead: run bulk-generate on a healthy module — if ensureTableExists runs idempotently,
-  // no error should occur.
+  // 如果 ensureTableExists 实现正确，对健康模块调用 bulk-generate 应幂等成功
   const { status, data } = await apiRequest(
-    'POST', `/api/data/${target.name}/bulk-generate`, token, { count: 2 }
+    'POST', `/api/data/user/bulk-generate`, token, { count: 2 }
   );
   expect(status).toBe(200);
   expect(data.data.generated).toBe(2);
 
   // 清理插入的 2 条
-  await apiRequest('POST', `/api/data/${target.name}/clear`, token);
+  await apiRequest('POST', `/api/data/user/clear`, token);
 });
 
 // =======================================================================

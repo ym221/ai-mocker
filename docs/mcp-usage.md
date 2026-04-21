@@ -88,8 +88,8 @@ MCP 服务与 Web UI **跑在同一进程**，共享同一份 SQLite。IDE AI �
 
 | 工具 | 用途 |
 |------|------|
-| `create_module_from_spec` | 从 OpenAPI / YAML / 自然语言创建模块。支持 `dry_run` 预览 |
-| `update_module` | 用自然语言指令修改模块。支持 `dry_run` 预览 |
+| `create_module_from_spec` | 从 OpenAPI / YAML / 自然语言创建模块。支持 `dry_run` 预览。可选 `provider`/`model`/`preset` 覆盖会话级默认 |
+| `update_module` | 用自然语言指令修改模块。支持 `dry_run` 预览。可选 `provider`/`model`/`preset` 覆盖会话级默认 |
 
 ### 汇报（1 个）
 
@@ -299,12 +299,67 @@ AI 可先预览，和用户确认后再不带 `dry_run` 正式跑。
 
 ---
 
-## 12. 路线图
+## 12. 规范契约与模型切换（Step-MCP-3）
+
+### 12.1 mock-router 不再强制 404
+
+**旧行为**（已移除）：controller 返 `{ success: false }` 时被映射成 404。
+**新行为**：mock-router 是透明传输层，controller 返回值是权威的：
+
+| controller 返回 | HTTP 状态 |
+|----------------|---------|
+| `{ success: true, data }` | 200 |
+| `{ success: false, message }` | **200**（业务校验失败，默认） |
+| `{ success: false, message, statusCode: 422 }` | 422 |
+| `{ success: false, statusCode: 404 }` | 404 |
+| `{ code: 0, data, msg }`（阿里风格） | 200 |
+| `{ __mock__: { status: 303, headers: { Location }, body: null } }` | 303（逃生舱） |
+
+`statusCode` 字段会被 mock-router 消费（不会出现在 response body）。`__mock__` 逃生舱可完全自定义响应，包含重定向 / 文件下载 / 自定义 header 等。
+
+### 12.2 规范决策流程（AI 遵循的硬规则）
+
+对**每一项规范**（响应信封 / 字段命名 / 分页参数 / 状态码策略 / 错误码体系 等），AI 按以下优先级**独立**决策：
+
+1. **用户本次 spec/instruction 明确提及** → 无条件按用户
+2. **项目预设里有** → 按预设
+3. **否则** → 最佳实践默认
+
+禁止折中、禁止擅自补充、禁止曲解、禁止同项混合。AI 在生成前必须在 thinking 里填"决策对账表"；若用户和预设冲突，最终回复末尾会出现"已优先采用你的指令（忽略 preset.X）"的声明。
+
+### 12.3 provider / model / preset 覆盖
+
+`create_module_from_spec` / `update_module` 可选参数：
+
+```jsonc
+{
+  "spec": "...",
+  "provider": 2,              // 使用 id=2 的 provider（覆盖自动选择）
+  "model": "gpt-4o-mini",     // 覆盖 provider 默认模型
+  "preset": "aliyun-style"    // 按名字锁定预设；或传数字 id
+}
+```
+
+用法场景：
+- IDE 里的 AI 明确要用"阿里风格"（snake_case + `{code, data, msg}`）生成时：`preset: 'aliyun-style'`
+- 想换一个更便宜/更快的模型临时跑：`provider: X, model: 'gpt-4o-mini'`
+- 不传 → 沿用自动选择（scope=public 免费 provider 优先），与 MCP-2 行为一致
+
+### 12.4 Web UI 的选择器
+
+- 新建对话按钮现在会弹 dialog，可选 provider / model / preset，或直接"跳过默认"用系统选择
+- 对话输入框上方的 meta-bar 显示"{provider} · {model} · {preset}"，点击可中途切换；生成进行中会禁用，等本轮结束即可改
+- 所有选择都存 localStorage，下次预填
+
+---
+
+## 13. 路线图
 
 | 版本 | 状态 | 能力 |
 |------|------|------|
 | Step-MCP-1 | ✅ | 只读工具 + API Key + guide |
-| Step-MCP-2 | ✅（当前） | 写工具 + 业务侧感知 + 交接报告 + progress notifications + 软 warnings + dry_run |
-| 未来 | — | 细粒度 Key 权限（read-only / write）、stdio transport（如有需求再做） |
+| Step-MCP-2 | ✅ | 写工具 + 业务侧感知 + 交接报告 + progress notifications + 软 warnings + dry_run |
+| Step-MCP-3 | ✅（当前） | mock-router 放权 + 规范决策硬规则 + provider/model/preset 覆盖 + Web UI 选择器 |
+| 未来 | — | 细粒度 Key 权限（read-only / write）、stdio transport、sampling 优化生成 |
 
-更详细的设计和决策记录见 [`ANALYSIS-AI-DEV-WORKFLOW.md`](../ANALYSIS-AI-DEV-WORKFLOW.md) 和 `CURSOR.md` 的 Step-MCP-2 章节。
+更详细的设计和决策记录见 [`ANALYSIS-AI-DEV-WORKFLOW.md`](../ANALYSIS-AI-DEV-WORKFLOW.md) 和 `CURSOR.md` 的 Step-MCP-{1,2,3} 章节。

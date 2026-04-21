@@ -2,7 +2,7 @@
 
 ## 当前位置
 - **Phase**: ALL COMPLETE
-- **状态**: Step-MCP-2 完成（MCP 全功能上线：写工具 + 业务侧感知 + 交接报告）
+- **状态**: Step-MCP-3 完成（mock-router 放权 + 规范决策硬规则 + provider/model/preset 覆盖 + Web UI 选择器）
 
 ## 已完成 Step
 - [x] Step 1: 项目初始化 (d759059)
@@ -30,6 +30,7 @@
 - [x] **Step-UX-Polish-5**: 统一 Toast 封装 + send() 兜底 + isGenerating 启发式 + 数据表自愈 + AI 测试规范强化
 - [x] **Step-MCP-1**: MCP Server 只读骨架 — API Key 鉴权 + HTTP Streamable Transport + 3 只读工具 + guide Resource + Settings API Keys Tab
 - [x] **Step-MCP-2**: MCP 写能力 + 业务侧感知 + 交接报告 — 12 个 MCP 工具全集 + access log + progress notifications + 软 warnings + dry_run + handoff report + headless-session 桥接
+- [x] **Step-MCP-3**: Mock 保真度 + 规范契约 + 选择器入口 — mock-router 放权 + system-prompt 规范决策硬规则 + MCP provider/model/preset 覆盖 + Web UI 新建对话 dialog + 对话中 meta-bar 切换
 
 ## Step-Chat-Resumable 变更摘要
 计划文档: `plans/STEP-CHAT-RESUMABLE-PLAN.md`
@@ -316,5 +317,36 @@
 ### 已知 flaky
 - `tests/mcp-server-v2.spec.ts` M32 `update_module 真实修改`：gemma 在 update 分支延迟偏大，setTimeout=300s 下偶尔需 retry。Playwright retries 策略使其最终绿（同 R11b 先例处理），不阻塞 CI
 
+## Step-MCP-3 变更摘要
+目标：修 mock-router 状态码强制语义 + 让规范契约在 AI 生成时真正被遵循 + 暴露 provider/model/preset 入口（MCP + Web UI）。
+
+### 核心变更
+- **mock-router 放权**（`src/server/core/mock-router.ts`）：删除 `success:false → 404` 强制映射；新增 `__mock__` 逃生舱（status/headers/body）+ `statusCode` 字段显式覆盖；阿里风格 `{code, data, msg}` 默认 200
+- **system-prompt 重构**（`src/server/agent/system-prompt.ts`）：分层结构（用户/预设/默认三段独立分区）+ Step 1→2→3 决策流程硬规则 + 4 条"禁止动作"（折中/擅自补充/曲解/同项混合）+ 决策对账（write_file 前必填表）+ 冲突可见化（最终回复里声明 override）+ 默认最佳实践段（HTTP 状态码语义 / 业务校验失败默认 200 + success:false）
+- **MCP 工具参数扩展**（`src/server/mcp/lib/headless-session.ts` + 两个工具 schema）：`create_module_from_spec` / `update_module` 接受 `provider?` / `model?` / `preset?`（id 或 name）；scope-aware 校验（user-owned 或 public）；未知 id/name 抛友好错误
+- **Web UI 新建对话 dialog**（`src/client/components/chat/SessionConfigDialog.vue` + ChatPage）：点"新建对话"弹 dialog，3 个可选选择器，"跳过默认"一键；localStorage 记住上次选择
+- **Web UI 对话中切换**（`src/client/components/chat/SessionMetaBar.vue`）：输入框上方显示 `{provider} · {model} · {preset}`；点击复用同 dialog（标题"切换会话配置"，描述"下一轮起生效"）；runStatus=running 时禁用 + 提示
+
+### 关键修改
+- `src/server/core/mock-router.ts` — 响应处理顺序：__mock__ → statusCode → 默认 200；statusCode 字段从 body 里剥除
+- `src/server/agent/system-prompt.ts` — controller 模板里 `{ success: false, statusCode: 404 }` 展示新约定；默认最佳实践段解释"业务校验失败走 200，HTTP 4xx 留给真正的资源不存在"
+- `src/server/mcp/lib/headless-session.ts` — 新增 resolveProviderOverride / resolvePreset（scope-aware）；HeadlessOptions 加 providerId/model/presetId/presetName
+- `src/client/stores/chat.ts` — createSession 接受 model + null 过滤；updateSessionConfig 新增（PUT /api/sessions/:id）
+- `tests/helpers.ts` — 新增 startNewChatSession helper 封装两步流程；32 处遗留 `click('text=新建对话')` 全部迁移
+
+### 测试
+- `tests/mock-router-response.spec.ts` — MR01-MR08 共 8 条（6 种响应形态 + 2 个边界）
+- `tests/system-prompt.spec.ts` — SP01-SP06 结构/分区/回退
+- `tests/mcp-priority.spec.ts` — P01-P07 决策流程 + 禁止动作 + 对账 + 冲突可见化
+- `tests/page-chat-new-session.spec.ts` — NS01-NS04 dialog / skip / preset / provider→model 联动
+- `tests/page-chat-switch.spec.ts` — SW01-SW03 meta-bar 显示 / 切换 model / running 禁用
+- `tests/mcp-server-v2.spec.ts` 追加 M33-M37 — preset/model 覆盖 + 未知 id/name 友好错误
+- T5-03 稳定性修复（从"第一个健康模块"改为明确 'user' fixture，避开 warehouse CHECK 约束）
+
+### 测试结果
+- 新增测试: 27 全绿（MR:8 + SP:6 + P:7 + NS:4 + SW:3 + M33-37:5）— 其中 M30 tools/list 仍是 12 个工具（无新增）
+- 关键回归: page-chat(23/23) + api-data(13/13) + mcp-server-v2 ex-M25/M32(25/25) + api + responsive(51/51) + chat-resumable + page-modules + page-data-management + navigation + e2e-flows + step-ux-polish-3..5 = **223 passed**
+- 已知 flaky（不阻塞验收）: M25/M32 真实 LLM 测试沿用 CURSOR.md 原策略（Playwright retries 策略使其最终绿）
+
 ## 下一步
-Phase 6 已完成（MCP-1 + MCP-2）。若未来需要：细粒度权限 Key（只读/写分级）、stdio transport、sampling-based 生成优化，再开 Step-MCP-3。
+Phase 6 已完成（MCP-1 + MCP-2 + MCP-3）。若未来需要：细粒度权限 Key（只读/写分级）、stdio transport、sampling-based 生成优化，再开 Step-MCP-4。

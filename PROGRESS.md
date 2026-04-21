@@ -8,7 +8,7 @@
 | 3 | 前端 — 对话 | ✅ 完成 |
 | 4 | 前端 — 模块管理 | ✅ 完成 |
 | 5 | 增强 | ✅ 完成 |
-| 6 | MCP 集成 | ✅ 完成（Step-MCP-1 + Step-MCP-2）|
+| 6 | MCP 集成 | ✅ 完成（Step-MCP-1 + Step-MCP-2 + Step-MCP-3）|
 
 ## Phase 1：项目基础
 
@@ -88,6 +88,17 @@
 - create/update 工具支持 **MCP progress notifications** 和 **dry_run** 预览
 - `generate_handoff_report` 输出结构化 markdown（契约 + 健康 + 访问日志 + 后端建议）
 - 新增 30 条测试（mock-access-log L01-L05、mcp-server-v2 M11-M32、mcp-headless-session H01-H02、mcp-retry-counter R01-R04）；M25/M32 用 admin 免费 gemma 真实调 LLM 验证
+- 详见 `CURSOR.md` 对应章节
+
+### Step-MCP-3: Mock 保真度 + 规范契约 + 选择器入口 ✅
+- **mock-router 放权**（`core/mock-router.ts`）：删除 `success:false → 404` 强制映射；controller 返回值是权威的；新增 `__mock__` 逃生舱（status/headers/body 完全自定义）+ `statusCode` 字段显式覆盖；阿里风格 `{code, data, msg}` 默认 200 原样通过
+- **system-prompt 重构**（`agent/system-prompt.ts`）：分层结构（用户/预设/默认三段独立分区）+ Step 1→2→3 决策流程硬规则 + 4 条"禁止动作"（折中/擅自补充/曲解/同项混合）+ 决策对账（write_file 前必填表）+ 冲突可见化要求；默认最佳实践段含 HTTP 状态码语义说明（业务校验失败默认 200 + success:false）
+- **MCP 工具参数扩展**（`mcp/lib/headless-session.ts` + 两个工具 schema）：`create_module_from_spec` / `update_module` 接受 `provider?` / `model?` / `preset?`（id 或 name）；scope-aware 校验（user-owned 或 public）；未知 id/name 抛友好错误
+- **Web UI 新建对话 dialog**（`client/components/chat/SessionConfigDialog.vue`）：点"新建对话"弹 dialog，provider/model/preset 三个可选选择器 + "跳过默认"快捷；localStorage 记住上次选择；切 provider 自动预填 model
+- **Web UI 对话中切换**（`client/components/chat/SessionMetaBar.vue`）：输入框上方 meta-bar 显示 `{provider} · {model} · {preset}`；点击复用同一 dialog（标题改为"切换会话配置"）；runStatus=running 时禁用 + 提示等本轮结束
+- 新增 27 条测试（mock-router-response MR01-08 + system-prompt SP01-06 + mcp-priority P01-07 + page-chat-new-session NS01-04 + page-chat-switch SW01-03 + mcp-server-v2 M33-37）
+- 关键回归 223 passed（page-chat 23, api-data 13, mcp-server-v2 ex-LLM 25, api+responsive 51, chat-resumable, page-modules, page-data-management, navigation, e2e-flows, step-ux-polish-3..5 等）
+- 已知 flaky（不阻塞）：M25/M32 真实 LLM 测试沿用 CURSOR.md 既有 retries 策略
 - 详见 `CURSOR.md` 对应章节
 
 ## 关键决策记录

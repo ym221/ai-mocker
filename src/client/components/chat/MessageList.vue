@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue';
 import MessageBubble from './MessageBubble.vue';
+import type { DisplayMessage } from '../../stores/chat';
 
 const props = defineProps<{
-  messages: { role: string; content: string }[];
+  messages: DisplayMessage[];
 }>();
 
 const listRef = ref<HTMLDivElement | null>(null);
@@ -25,6 +26,8 @@ function handleScroll() {
 
 watch(() => props.messages.length, scrollToBottom);
 watch(() => props.messages[props.messages.length - 1]?.content, scrollToBottom);
+watch(() => props.messages[props.messages.length - 1]?.thinking, scrollToBottom);
+watch(() => props.messages[props.messages.length - 1]?.toolCalls?.length, scrollToBottom);
 </script>
 
 <template>
@@ -36,16 +39,24 @@ watch(() => props.messages[props.messages.length - 1]?.content, scrollToBottom);
     <div class="max-w-3xl mx-auto">
       <div v-if="messages.length === 0" class="flex items-center justify-center h-full min-h-[400px]">
         <div class="text-center text-muted-foreground">
-          <h2 class="text-2xl font-bold mb-2">MockForge</h2>
-          <p>Describe the API you want to generate</p>
+          <h2 class="text-2xl font-bold mb-2">AI Mock</h2>
+          <p>描述你想生成的 Mock API 模块</p>
         </div>
       </div>
 
       <MessageBubble
         v-for="(msg, index) in messages"
         :key="index"
-        :role="msg.role as 'user' | 'assistant'"
+        :role="msg.role === 'user' ? 'user' : 'assistant'"
         :content="msg.content"
+        :thinking="msg.thinking"
+        :thinking-complete="msg.thinkingComplete"
+        :tool-calls="msg.toolCalls"
+        :modules="msg.modules"
+        :message-error="msg.messageError"
+        :stream-done="msg.streamDone"
+        :aborted="msg.aborted"
+        :started-at="msg.startedAt"
       />
     </div>
   </div>

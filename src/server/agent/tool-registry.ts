@@ -6,9 +6,24 @@ import { runTest } from './tools/run-test.js';
 import { manageData } from './tools/manage-data.js';
 import { listModules } from './tools/list-modules.js';
 import { deleteModule } from './tools/delete-module.js';
+import type { ChatRunner } from './chat-runner.js';
 
-export function buildTools(userId: number) {
+export function buildTools(userId: number, runner?: ChatRunner) {
   return {
+    set_module_intent: tool({
+      description: '【必须在开始生成前调用】声明本次要创建或修改的模块。后端会对照数据库纠偏并更新模块状态。',
+      parameters: z.object({
+        moduleName: z.string().describe('Module name (英文，与文件目录一致)'),
+        operation: z.enum(['create', 'edit']).describe('create = 新建模块; edit = 修改已有模块'),
+      }),
+      execute: async ({ moduleName, operation }) => {
+        if (!runner) {
+          return { success: true, message: 'No runner context', moduleName, operation };
+        }
+        const result = runner.applyModuleIntent(userId, { moduleName, operation });
+        return { success: true, ...result };
+      },
+    }),
     write_file: tool({
       description: 'Write a file to generated/{userId}/ directory. SQL files are auto-executed. _meta.json auto-syncs to modules table.',
       parameters: z.object({

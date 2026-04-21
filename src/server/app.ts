@@ -26,7 +26,7 @@ await app.register(multipart, {
 
 // Rate limiting for API routes
 await app.register(rateLimit, {
-  max: 100,
+  max: process.env.NODE_ENV === 'production' ? 100 : 2000,
   timeWindow: '1 minute',
   keyGenerator: (request) => {
     return request.ip;

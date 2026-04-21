@@ -37,7 +37,12 @@ export async function writeFile(userId: number, path: string, content: string): 
   // Auto-execute SQL files
   if (path.endsWith('.sql')) {
     try {
-      sqlite.exec(content);
+      // 注入 userId 前缀：mock__{suffix} → mock__{userId}_{suffix}
+      // 匹配标识符中的 mock__xxx（反引号包裹或裸名）
+      const injectedSql = content
+        .replace(/`mock__([a-zA-Z0-9_]+)`/g, `\`mock__${userId}_$1\``)
+        .replace(/(?<![`\w])mock__([a-zA-Z0-9_]+)(?![`\w])/g, `mock__${userId}_$1`);
+      sqlite.exec(injectedSql);
       return `File written and SQL executed: ${path}`;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -55,16 +60,16 @@ export async function writeFile(userId: number, path: string, content: string): 
         .get();
 
       if (existing) {
-        db.update(modules)
-          .set({
-            displayName: meta.displayName || moduleName,
-            description: meta.description || '',
-            basePath: meta.basePath || `/mock/${moduleName}`,
-            status: meta.status || 'active',
-            updatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
-          })
-          .where(eq(modules.id, existing.id))
-          .run();
+        // Preserve transient 'creating'/'editing' status — finalize() will flip to 'active'
+        const preserveStatus = existing.status === 'creating' || existing.status === 'editing';
+        const updateValues: Record<string, unknown> = {
+          displayName: meta.displayName || moduleName,
+          description: meta.description || '',
+          basePath: meta.basePath || `/mock/${moduleName}`,
+          updatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
+        };
+        if (!preserveStatus) updateValues.status = meta.status || 'active';
+        db.update(modules).set(updateValues as any).where(eq(modules.id, existing.id)).run();
       } else {
         db.insert(modules).values({
           name: moduleName,

@@ -2,7 +2,7 @@
 import { ref } from 'vue';
 import { Send, Square, Paperclip, X } from 'lucide-vue-next';
 import { Button } from '../ui/button';
-import { toast } from 'vue-sonner';
+import { toast } from '../../composables/use-toast';
 
 const props = defineProps<{
   loading?: boolean;
@@ -62,7 +62,7 @@ async function handleFileSelect(e: Event) {
 
   for (const file of Array.from(files)) {
     if (file.size > 10 * 1024 * 1024) {
-      toast.error(`File ${file.name} exceeds 10MB limit`);
+      toast.error(`文件 ${file.name} 超过 10MB 限制`);
       continue;
     }
 
@@ -85,10 +85,10 @@ async function handleFileSelect(e: Event) {
           content: data.data.content,
         });
       } else {
-        toast.error(data.message || 'Upload failed');
+        toast.error(data.message || '上传失败');
       }
     } catch {
-      toast.error('Upload failed');
+      toast.error('上传失败');
     }
   }
 
@@ -149,7 +149,7 @@ function handleDragOver(e: DragEvent) {
       <button
         @click="fileInput?.click()"
         class="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent"
-        title="Attach files"
+        title="添加附件"
       >
         <Paperclip class="w-5 h-5" />
       </button>
@@ -159,7 +159,7 @@ function handleDragOver(e: DragEvent) {
         v-model="input"
         @input="adjustHeight"
         @keydown="handleKeydown"
-        :placeholder="loading ? 'AI is generating...' : 'Send a message... (Shift+Enter for new line)'"
+        :placeholder="loading ? 'AI 正在生成...' : '输入消息...（Shift+Enter 换行）'"
         :disabled="loading"
         rows="1"
         class="flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 max-h-[200px]"
@@ -169,7 +169,8 @@ function handleDragOver(e: DragEvent) {
         size="icon"
         variant="outline"
         @click="$emit('stop')"
-        title="Stop generating"
+        title="停止生成"
+        data-testid="chat-stop"
       >
         <Square class="w-4 h-4" />
       </Button>
@@ -178,7 +179,7 @@ function handleDragOver(e: DragEvent) {
         size="icon"
         :disabled="!input.trim() && attachments.length === 0"
         @click="handleSend"
-        title="Send message"
+        title="发送消息"
       >
         <Send class="w-4 h-4" />
       </Button>

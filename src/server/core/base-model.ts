@@ -8,32 +8,12 @@ export interface MockContext {
 
 export const mockContext = new AsyncLocalStorage<MockContext>();
 
-// camelCase → snake_case
-function toSnakeCase(str: string): string {
-  return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-}
-
-// snake_case → camelCase
-function toCamelCase(str: string): string {
-  return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
-}
-
-// Convert object keys from camelCase to snake_case
-function keysToSnake(obj: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    result[toSnakeCase(key)] = value;
-  }
-  return result;
-}
-
-// Convert object keys from snake_case to camelCase
-function keysToCamel(obj: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    result[toCamelCase(key)] = value;
-  }
-  return result;
+// Normalize JS values for SQLite binding (SQLite can't bind booleans / objects)
+function normalizeBindValue(v: unknown): unknown {
+  if (typeof v === 'boolean') return v ? 1 : 0;
+  if (v === undefined) return null;
+  if (v !== null && typeof v === 'object') return JSON.stringify(v);
+  return v;
 }
 
 interface WhereCondition {
@@ -89,7 +69,7 @@ export class BaseModel {
     const params: unknown[] = [];
 
     for (const [key, value] of Object.entries(where)) {
-      const column = toSnakeCase(key);
+      const column = key;
 
       if (value === null || value === undefined) {
         conditions.push(`\`${column}\` IS NULL`);
@@ -122,7 +102,7 @@ export class BaseModel {
         }
       } else {
         conditions.push(`\`${column}\` = ?`);
-        params.push(value);
+        params.push(normalizeBindValue(value));
       }
     }
 
@@ -149,7 +129,7 @@ export class BaseModel {
     const rows = sqlite.prepare(dataSql).all(...whereParams, pageSize, offset) as Record<string, unknown>[];
 
     return {
-      list: rows.map(keysToCamel),
+      list: rows,
       total,
       page,
       pageSize,
@@ -159,21 +139,23 @@ export class BaseModel {
   findById(id: number): Record<string, unknown> | null {
     const tableName = this.getTableName();
     const row = sqlite.prepare(`SELECT * FROM \`${tableName}\` WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
-    return row ? keysToCamel(row) : null;
+    return row ?? null;
   }
 
   create(data: Record<string, unknown>): Record<string, unknown> {
     const tableName = this.getTableName();
-    const snakeData = keysToSnake(data);
+    const cleanData = { ...data };
 
-    // Remove id, created_at, updated_at — let DB handle them
-    delete snakeData.id;
-    delete snakeData.created_at;
-    delete snakeData.updated_at;
+    // Remove system fields — let DB handle them
+    delete cleanData.id;
+    delete cleanData.created_at;
+    delete cleanData.updated_at;
+    delete (cleanData as Record<string, unknown>).createdAt;
+    delete (cleanData as Record<string, unknown>).updatedAt;
 
-    const columns = Object.keys(snakeData);
+    const columns = Object.keys(cleanData);
     const placeholders = columns.map(() => '?').join(', ');
-    const values = Object.values(snakeData);
+    const values = Object.values(cleanData).map(normalizeBindValue);
 
     const sql = `INSERT INTO \`${tableName}\` (${columns.map(c => `\`${c}\``).join(', ')}) VALUES (${placeholders})`;
     const result = sqlite.prepare(sql).run(...values);
@@ -183,17 +165,18 @@ export class BaseModel {
 
   update(id: number, data: Record<string, unknown>): Record<string, unknown> {
     const tableName = this.getTableName();
-    const snakeData = keysToSnake(data);
+    const cleanData = { ...data };
 
-    // Remove id, created_at — don't update these
-    delete snakeData.id;
-    delete snakeData.created_at;
+    // Remove system fields — don't update these
+    delete cleanData.id;
+    delete cleanData.created_at;
+    delete (cleanData as Record<string, unknown>).createdAt;
 
     // Set updated_at
-    snakeData.updated_at = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    cleanData.updated_at = new Date().toISOString().replace('T', ' ').slice(0, 19);
 
-    const setClauses = Object.keys(snakeData).map(c => `\`${c}\` = ?`).join(', ');
-    const values = Object.values(snakeData);
+    const setClauses = Object.keys(cleanData).map(c => `\`${c}\` = ?`).join(', ');
+    const values = Object.values(cleanData).map(normalizeBindValue);
 
     const sql = `UPDATE \`${tableName}\` SET ${setClauses} WHERE id = ?`;
     sqlite.prepare(sql).run(...values, id);

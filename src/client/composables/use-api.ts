@@ -1,5 +1,5 @@
 import { useAuthStore } from '../stores/auth';
-import { toast } from 'vue-sonner';
+import { toast } from './use-toast';
 import { useRouter } from 'vue-router';
 
 export function useApi() {
@@ -17,8 +17,9 @@ export function useApi() {
       headers['Authorization'] = `Bearer ${authStore.token}`;
     }
 
-    // Don't set Content-Type for FormData
-    if (!(options.body instanceof FormData)) {
+    // 只在有 body 且不是 FormData 时设置 application/json
+    // 否则 Fastify 对 DELETE 等无 body 请求会报 "Body cannot be empty"
+    if (options.body && !(options.body instanceof FormData)) {
       headers['Content-Type'] = 'application/json';
     }
 
@@ -34,10 +35,14 @@ export function useApi() {
       throw new Error('Unauthorized');
     }
 
-    const data = await response.json();
+    const text = await response.text();
+    let data: any = null;
+    if (text) {
+      try { data = JSON.parse(text); } catch { /* non-JSON response */ }
+    }
 
     if (!response.ok) {
-      const message = data?.message || 'Request failed';
+      const message = data?.message || `Request failed (${response.status})`;
       toast.error(message);
       throw new Error(message);
     }

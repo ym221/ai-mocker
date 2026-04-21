@@ -1,0 +1,14 @@
+{
+  "cookies": [],
+  "origins": [
+    {
+      "origin": "http://127.0.0.1:5177",
+      "localStorage": [
+        {
+          "name": "mockforge_token",
+          "value": "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VySWQiOjEsInVzZXJuYW1lIjoiYWRtaW4iLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzY0MTkzNTQsImV4cCI6MTc3NzAyNDE1NH0.GQh_Hm4vX1TuDTb8qCFD-EMZBqmx6yAPmkKfIP-Xq94"
+        }
+      ]
+    }
+  ]
+}

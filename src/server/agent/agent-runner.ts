@@ -1,4 +1,4 @@
-import { streamText, type CoreMessage } from 'ai';
+import { streamText, stepCountIs, type CoreMessage } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { db } from '../core/database.js';
 import { providers, presets, sessions, messages, modules } from '../core/schema.js';
@@ -6,6 +6,7 @@ import { decrypt } from '../core/encryption.js';
 import { eq, and } from 'drizzle-orm';
 import { buildSystemPrompt } from './system-prompt.js';
 import { buildTools } from './tool-registry.js';
+import { createCompatFetch } from './compat-fetch.js';
 import { readFileSync, existsSync } from 'fs';
 import { resolve, join } from 'path';
 
@@ -15,9 +16,16 @@ interface RunAgentOptions {
   sessionId: string;
   userId: number;
   userMessages: CoreMessage[];
+  abortSignal?: AbortSignal;
 }
 
-export async function runAgent({ sessionId, userId, userMessages }: RunAgentOptions) {
+export interface AgentResult {
+  fullStream: AsyncIterable<any>;
+  providerType: string;
+  modelName: string;
+}
+
+export async function runAgent({ sessionId, userId, userMessages, abortSignal }: RunAgentOptions): Promise<AgentResult> {
   // Load session config
   const session = db.select().from(sessions)
     .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId)))
@@ -43,14 +51,14 @@ export async function runAgent({ sessionId, userId, userMessages }: RunAgentOpti
     throw new Error('AI Provider API Key is not configured. Please go to Settings → AI Providers to add your API key.');
   }
 
-  // Create AI model — use compatibility mode for OpenAI-compatible providers (e.g. 豆包/DeepSeek)
-  // compatibility: 'compatible' uses /chat/completions instead of /responses
+  // Create AI model with compat fetch to fix non-standard SSE formats
   const openai = createOpenAI({
     apiKey,
     baseURL: provider.baseUrl || undefined,
     compatibility: 'compatible',
+    fetch: createCompatFetch(provider.baseUrl || undefined),
   });
-  const model = openai(session.model || provider.defaultModel);
+  const model = openai.chat(session.model || provider.defaultModel);
 
   // Load preset
   let preset = null;
@@ -90,7 +98,7 @@ export async function runAgent({ sessionId, userId, userMessages }: RunAgentOpti
     ...userMessages,
   ];
 
-  // Persist user messages immediately (prevent loss on stream interruption)
+  // Persist user messages immediately
   for (const msg of userMessages) {
     if (msg.role === 'user') {
       db.insert(messages).values({
@@ -103,6 +111,7 @@ export async function runAgent({ sessionId, userId, userMessages }: RunAgentOpti
 
   // Build tools with userId injection
   const tools = buildTools(userId);
+  const modelName = session.model || provider.defaultModel;
 
   // Run agent with streaming
   const result = streamText({
@@ -110,7 +119,8 @@ export async function runAgent({ sessionId, userId, userMessages }: RunAgentOpti
     system: systemPrompt,
     messages: allMessages,
     tools,
-    maxSteps: 10,
+    stopWhen: stepCountIs(20),
+    abortSignal,
     onFinish: async ({ response }) => {
       // Persist assistant messages (after stream completes)
       for (const msg of response.messages) {
@@ -140,5 +150,9 @@ export async function runAgent({ sessionId, userId, userMessages }: RunAgentOpti
     },
   });
 
-  return result;
+  return {
+    fullStream: result.fullStream,
+    providerType: provider.type,
+    modelName,
+  };
 }

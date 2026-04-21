@@ -82,7 +82,10 @@ export function initDatabase() {
       session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
       role TEXT NOT NULL,
       content TEXT,
+      thinking TEXT,
       tool_calls TEXT,
+      modules TEXT,
+      message_error TEXT,
       attachments TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
@@ -112,7 +115,64 @@ export function initDatabase() {
       response_body TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS message_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
+      seq INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS msg_events_session_seq_unique
+      ON message_events (session_id, seq);
+    CREATE INDEX IF NOT EXISTS msg_events_message_id_idx
+      ON message_events (message_id);
   `);
+
+  // Migrations for existing databases
+  const msgCols = sqlite.prepare("PRAGMA table_info('messages')").all() as { name: string }[];
+  const msgColNames = new Set(msgCols.map(c => c.name));
+  if (!msgColNames.has('thinking')) sqlite.exec("ALTER TABLE messages ADD COLUMN thinking TEXT");
+  if (!msgColNames.has('modules')) sqlite.exec("ALTER TABLE messages ADD COLUMN modules TEXT");
+  if (!msgColNames.has('message_error')) sqlite.exec("ALTER TABLE messages ADD COLUMN message_error TEXT");
+  if (!msgColNames.has('paused')) sqlite.exec("ALTER TABLE messages ADD COLUMN paused INTEGER DEFAULT 0");
+  if (!msgColNames.has('finalized_at')) sqlite.exec("ALTER TABLE messages ADD COLUMN finalized_at TEXT");
+  if (!msgColNames.has('started_at')) sqlite.exec("ALTER TABLE messages ADD COLUMN started_at INTEGER");
+
+  const sessCols = sqlite.prepare("PRAGMA table_info('sessions')").all() as { name: string }[];
+  const sessColNames = new Set(sessCols.map(c => c.name));
+  if (!sessColNames.has('run_status')) sqlite.exec("ALTER TABLE sessions ADD COLUMN run_status TEXT DEFAULT 'idle'");
+  if (!sessColNames.has('has_unread')) sqlite.exec("ALTER TABLE sessions ADD COLUMN has_unread INTEGER DEFAULT 0");
+  if (!sessColNames.has('last_seq')) sqlite.exec("ALTER TABLE sessions ADD COLUMN last_seq INTEGER DEFAULT 0");
+
+  const modCols = sqlite.prepare("PRAGMA table_info('modules')").all() as { name: string }[];
+  const modColNames = new Set(modCols.map(c => c.name));
+  if (!modColNames.has('error_message')) sqlite.exec("ALTER TABLE modules ADD COLUMN error_message TEXT");
+  if (!modColNames.has('last_run_status')) sqlite.exec("ALTER TABLE modules ADD COLUMN last_run_status TEXT");
+  if (!modColNames.has('last_run_error')) sqlite.exec("ALTER TABLE modules ADD COLUMN last_run_error TEXT");
+
+  // MCP: users 表新增 API Key 相关字段
+  const userCols = sqlite.prepare("PRAGMA table_info('users')").all() as { name: string }[];
+  const userColNames = new Set(userCols.map(c => c.name));
+  if (!userColNames.has('api_key_hash')) sqlite.exec("ALTER TABLE users ADD COLUMN api_key_hash TEXT");
+  if (!userColNames.has('api_key_created_at')) sqlite.exec("ALTER TABLE users ADD COLUMN api_key_created_at TEXT");
+  if (!userColNames.has('api_key_last_used_at')) sqlite.exec("ALTER TABLE users ADD COLUMN api_key_last_used_at TEXT");
+  // Index for O(1) hash lookup
+  sqlite.exec("CREATE INDEX IF NOT EXISTS users_api_key_hash_idx ON users (api_key_hash)");
+
+  // Any session that was left 'running' after a restart is definitely not running anymore
+  sqlite.exec("UPDATE sessions SET run_status = 'idle' WHERE run_status = 'running'");
+  // Any module left 'creating'/'editing' after restart: treat as interrupted;
+  // the proper status will be re-derived from health on next inspection.
+  sqlite.exec(
+    `UPDATE modules
+       SET status = 'error',
+           last_run_status = COALESCE(last_run_status, 'interrupted'),
+           last_run_error = COALESCE(last_run_error, '服务重启中断')
+       WHERE status IN ('creating','editing')`
+  );
 }
 
 export { sqlite, db };

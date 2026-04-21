@@ -9,6 +9,9 @@ export const users = sqliteTable('users', {
   displayName: text('display_name'),
   role: text('role').notNull().default('user'), // admin | user
   isActive: integer('is_active').default(1),
+  apiKeyHash: text('api_key_hash'),                    // HMAC-SHA256(MCP_API_KEY_SECRET, plain)
+  apiKeyCreatedAt: text('api_key_created_at'),
+  apiKeyLastUsedAt: text('api_key_last_used_at'),
   createdAt: text('created_at').default(sql`(datetime('now'))`),
   updatedAt: text('updated_at').default(sql`(datetime('now'))`),
 });
@@ -51,6 +54,9 @@ export const sessions = sqliteTable('sessions', {
   model: text('model'),
   presetId: integer('preset_id').references(() => presets.id),
   moduleName: text('module_name'),
+  runStatus: text('run_status').default('idle'), // idle | running | paused | done | error
+  hasUnread: integer('has_unread').default(0),
+  lastSeq: integer('last_seq').default(0),
   createdAt: text('created_at').default(sql`(datetime('now'))`),
   updatedAt: text('updated_at').default(sql`(datetime('now'))`),
 });
@@ -61,10 +67,29 @@ export const messages = sqliteTable('messages', {
   sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
   role: text('role').notNull(), // user | assistant
   content: text('content'),
-  toolCalls: text('tool_calls'), // JSON
+  thinking: text('thinking'),   // legacy (still read for backward compat)
+  toolCalls: text('tool_calls'), // legacy
+  modules: text('modules'),      // legacy
+  messageError: text('message_error'), // legacy
   attachments: text('attachments'), // JSON
+  paused: integer('paused').default(0),    // assistant 消息被用户中断
+  finalizedAt: text('finalized_at'),
+  startedAt: integer('started_at'),        // runner 开始处理的毫秒时间戳
   createdAt: text('created_at').default(sql`(datetime('now'))`),
 });
+
+// ==================== message_events (append-only event log) ====================
+export const messageEvents = sqliteTable('message_events', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  messageId: integer('message_id').references(() => messages.id, { onDelete: 'cascade' }),
+  seq: integer('seq').notNull(),           // 会话内单调递增
+  type: text('type').notNull(),            // thinking|text|tool_call|tool_result|card|image|md|error|done|aborted|paused|user
+  payload: text('payload').notNull(),      // JSON
+  createdAt: text('created_at').default(sql`(datetime('now'))`),
+}, (t) => [
+  uniqueIndex('msg_events_session_seq_unique').on(t.sessionId, t.seq),
+]);
 
 // ==================== modules ====================
 export const modules = sqliteTable('modules', {
@@ -74,7 +99,10 @@ export const modules = sqliteTable('modules', {
   displayName: text('display_name').notNull(),
   description: text('description'),
   basePath: text('base_path').notNull(),
-  status: text('status').default('active'), // active | error | disabled
+  status: text('status').default('active'), // creating | editing | active | error | disabled
+  errorMessage: text('error_message'),
+  lastRunStatus: text('last_run_status'),  // done | error | timeout | interrupted
+  lastRunError: text('last_run_error'),
   createdAt: text('created_at').default(sql`(datetime('now'))`),
   updatedAt: text('updated_at').default(sql`(datetime('now'))`),
 }, (table) => [

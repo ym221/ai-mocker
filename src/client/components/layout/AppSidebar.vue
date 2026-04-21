@@ -34,7 +34,7 @@ function handleLogout() {
   <div class="flex flex-col h-full">
     <!-- Logo -->
     <div class="h-14 flex items-center px-4 border-b border-sidebar-border">
-      <span class="text-lg font-bold text-sidebar-foreground">MockForge</span>
+      <span class="text-lg font-bold text-sidebar-foreground">AI Mock</span>
     </div>
 
     <!-- Navigation -->
@@ -43,7 +43,7 @@ function handleLogout() {
         v-for="item in navItems"
         :key="item.path"
         :to="item.path"
-        class="flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors"
+        class="flex items-center gap-2.5 px-3 py-1.5 rounded-md text-sm transition-colors"
         :class="isActive(item.path)
           ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
           : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'"
@@ -67,7 +67,7 @@ function handleLogout() {
         <button
           @click="handleLogout"
           class="p-1.5 rounded-md text-sidebar-foreground/50 hover:text-sidebar-foreground hover:bg-sidebar-accent"
-          title="Logout"
+          title="退出登录"
         >
           <LogOut class="w-4 h-4" />
         </button>

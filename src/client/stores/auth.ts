@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import { toast } from 'vue-sonner';
+import { toast } from '../composables/use-toast';
 
 interface User {
   id: number;

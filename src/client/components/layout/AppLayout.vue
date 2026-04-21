@@ -15,7 +15,7 @@ function toggleSidebar() {
     <!-- Sidebar -->
     <aside
       v-show="sidebarOpen"
-      class="w-64 flex-shrink-0 border-r border-border bg-sidebar hidden lg:flex flex-col"
+      class="w-48 flex-shrink-0 border-r border-border bg-sidebar hidden lg:flex flex-col"
     >
       <AppSidebar />
     </aside>
@@ -28,7 +28,7 @@ function toggleSidebar() {
     />
     <aside
       v-if="sidebarOpen"
-      class="fixed inset-y-0 left-0 w-64 z-50 bg-sidebar border-r border-border lg:hidden flex flex-col"
+      class="fixed inset-y-0 left-0 w-48 z-50 bg-sidebar border-r border-border lg:hidden flex flex-col"
     >
       <AppSidebar />
     </aside>
@@ -36,7 +36,7 @@ function toggleSidebar() {
     <!-- Main content -->
     <div class="flex-1 flex flex-col overflow-hidden">
       <AppHeader @toggle-sidebar="toggleSidebar" />
-      <main class="flex-1 overflow-auto">
+      <main class="flex-1 overflow-auto" style="scrollbar-gutter: stable;">
         <RouterView />
       </main>
     </div>

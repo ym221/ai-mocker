@@ -56,11 +56,18 @@ export default async function sessionRoutes(app: FastifyInstance) {
       .all();
 
     // Parse JSON fields
-    const parsedMsgs = msgs.map(m => ({
-      ...m,
-      toolCalls: m.toolCalls ? JSON.parse(m.toolCalls) : null,
-      attachments: m.attachments ? JSON.parse(m.attachments) : null,
-    }));
+    const parsedMsgs = msgs.map(m => {
+      const safeParse = (s: string | null) => {
+        if (!s) return null;
+        try { return JSON.parse(s); } catch { return null; }
+      };
+      return {
+        ...m,
+        toolCalls: safeParse(m.toolCalls),
+        modules: safeParse(m.modules),
+        attachments: safeParse(m.attachments),
+      };
+    });
 
     return success({ ...session, messages: parsedMsgs });
   });
@@ -89,7 +96,7 @@ export default async function sessionRoutes(app: FastifyInstance) {
     return success(updated);
   });
 
-  // DELETE /api/sessions/:id — cascade deletes messages
+  // DELETE /api/sessions/:id — cascade deletes messages + events
   app.delete('/api/sessions/:id', async (request, reply) => {
     const userId = request.user!.id;
     const id = (request.params as { id: string }).id;
@@ -98,6 +105,15 @@ export default async function sessionRoutes(app: FastifyInstance) {
       .where(and(eq(sessions.id, id), eq(sessions.userId, userId)))
       .get();
     if (!session) return reply.status(404).send({ success: false, message: 'Session not found' });
+
+    // Stop any active runner BEFORE deleting session (prevents FK violation)
+    const { ChatRunner } = await import('../agent/chat-runner.js');
+    const runner = ChatRunner.get(id);
+    if (runner) {
+      runner.pause();
+      // Give it a moment to flush
+      await new Promise(r => setTimeout(r, 100));
+    }
 
     db.delete(sessions).where(eq(sessions.id, id)).run();
     return success(null, 'Session deleted');

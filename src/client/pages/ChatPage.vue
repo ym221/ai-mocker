@@ -1,10 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, computed, nextTick } from 'vue';
+import { computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { useChat } from '@ai-sdk/vue';
 import { useChatStore } from '../stores/chat';
-import { useAuthStore } from '../stores/auth';
-import { toast } from 'vue-sonner';
 import ChatPanel from '../components/chat/ChatPanel.vue';
 import { Button } from '../components/ui/button';
 import { Plus, Trash2, MessageSquare } from 'lucide-vue-next';
@@ -12,123 +9,85 @@ import { Plus, Trash2, MessageSquare } from 'lucide-vue-next';
 const route = useRoute();
 const router = useRouter();
 const chatStore = useChatStore();
-const authStore = useAuthStore();
 
-// useChat from @ai-sdk/vue — manages SSE stream, messages, tools automatically
-const {
-  messages: chatMessages,
-  input,
-  isLoading,
-  error: chatError,
-  append,
-  stop,
-  setMessages,
-} = useChat({
-  api: '/api/chat',
-  streamProtocol: 'text',
-  headers: () => ({
-    Authorization: `Bearer ${authStore.token}`,
-  }),
-  body: () => ({
-    sessionId: chatStore.activeSessionId,
-  }),
-  onError: (err) => {
-    toast.error(err.message || 'Failed to get AI response');
-  },
-  onFinish: () => {
-    // Auto-title from first user message
-    const userMsgs = chatMessages.value.filter(m => m.role === 'user');
-    if (userMsgs.length === 1 && chatStore.activeSessionId) {
-      const title = userMsgs[0].content.slice(0, 30) + (userMsgs[0].content.length > 30 ? '...' : '');
-      chatStore.updateSessionTitle(chatStore.activeSessionId, title);
-    }
-  },
-});
+const displayMessages = computed(() => chatStore.activeStream?.messages ?? []);
+const isLoading = computed(() => chatStore.activeStream?.status === 'running' || chatStore.activeStream?.status === 'connecting');
 
-// Convert useChat messages to the format ChatPanel expects
-const displayMessages = computed(() =>
-  chatMessages.value.map(m => ({
-    role: m.role,
-    content: m.content,
-  }))
-);
-
-const activeSession = computed(() =>
-  chatStore.sessions.find(s => s.id === chatStore.activeSessionId)
-);
-
-async function loadMessages(sessionId: string) {
-  try {
-    const data = await chatStore.loadSession(sessionId);
-    if (data.messages?.length) {
-      setMessages(data.messages.map(m => ({
-        id: String(m.id),
-        role: m.role as 'user' | 'assistant',
-        content: m.content || '',
-      })));
-    } else {
-      setMessages([]);
-    }
-  } catch {
-    setMessages([]);
+async function selectSession(sessionId: string) {
+  chatStore.activeSessionId = sessionId;
+  await router.push(`/chat/${sessionId}`);
+  const s = chatStore.getStream(sessionId);
+  if (!s.loaded && !s.abortController) {
+    chatStore.connect(sessionId);
+  } else if (!s.abortController) {
+    // reconnect to catch any new events since last disconnect
+    chatStore.connect(sessionId);
   }
+  // clear unread
+  const sess = chatStore.sessions.find(x => x.id === sessionId);
+  if (sess?.hasUnread) chatStore.markRead(sessionId);
 }
 
 async function handleSend(message: string) {
-  if (!chatStore.activeSessionId) {
+  let sid = chatStore.activeSessionId;
+  if (!sid) {
     const session = await chatStore.createSession();
-    router.replace(`/chat/${session.id}`);
-    await nextTick();
+    sid = session.id;
+    await selectSession(sid);
   }
-
-  append({ role: 'user', content: message });
+  await chatStore.send(sid!, message);
 }
 
 function handleStop() {
-  stop();
+  if (chatStore.activeSessionId) chatStore.pause(chatStore.activeSessionId);
 }
 
 async function handleNewChat() {
   const session = await chatStore.createSession();
-  setMessages([]);
-  router.push(`/chat/${session.id}`);
-}
-
-async function handleSelectSession(sessionId: string) {
-  chatStore.activeSessionId = sessionId;
-  router.push(`/chat/${sessionId}`);
-  await loadMessages(sessionId);
+  await selectSession(session.id);
 }
 
 async function handleDeleteSession(id: string) {
-  await chatStore.deleteSession(id);
+  try {
+    await chatStore.deleteSession(id);
+  } catch {
+    return;
+  }
   if (chatStore.sessions.length > 0) {
-    await handleSelectSession(chatStore.sessions[0].id);
+    await selectSession(chatStore.sessions[0].id);
   } else {
-    setMessages([]);
-    router.push('/chat');
+    await router.push('/chat');
   }
 }
 
-// Init
+// ========== Init ==========
+
 onMounted(async () => {
   await chatStore.fetchSessions();
-
   const sessionId = route.params.sessionId as string;
   if (sessionId) {
-    chatStore.activeSessionId = sessionId;
-    await loadMessages(sessionId);
+    await selectSession(sessionId);
   } else if (chatStore.sessions.length > 0) {
-    chatStore.activeSessionId = chatStore.sessions[0].id;
-    await loadMessages(chatStore.sessions[0].id);
-    router.replace(`/chat/${chatStore.sessions[0].id}`);
+    const first = chatStore.sessions[0].id;
+    router.replace(`/chat/${first}`);
+    await selectSession(first);
   }
+
+  // Poll sessions every 5s for unread updates
+  pollTimer = setInterval(async () => {
+    try { await chatStore.fetchSessions(); } catch {}
+  }, 5000);
+});
+
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+onBeforeUnmount(() => {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 });
 
 watch(() => route.params.sessionId, async (newId) => {
   if (newId && newId !== chatStore.activeSessionId) {
-    chatStore.activeSessionId = newId as string;
-    await loadMessages(newId as string);
+    await selectSession(newId as string);
   }
 });
 </script>
@@ -139,14 +98,14 @@ watch(() => route.params.sessionId, async (newId) => {
     <div class="w-56 border-r border-border bg-muted/30 hidden md:flex flex-col">
       <div class="p-3">
         <Button size="sm" class="w-full" @click="handleNewChat">
-          <Plus class="w-4 h-4 mr-1" /> New Chat
+          <Plus class="w-4 h-4 mr-1" /> 新建对话
         </Button>
       </div>
       <div class="flex-1 overflow-y-auto px-2 space-y-0.5">
         <div
           v-for="s in chatStore.sessions"
           :key="s.id"
-          @click="handleSelectSession(s.id)"
+          @click="selectSession(s.id)"
           class="group flex items-center gap-2 px-3 py-2 rounded-md text-sm cursor-pointer transition-colors"
           :class="s.id === chatStore.activeSessionId
             ? 'bg-accent text-accent-foreground'
@@ -154,6 +113,12 @@ watch(() => route.params.sessionId, async (newId) => {
         >
           <MessageSquare class="w-3.5 h-3.5 flex-shrink-0" />
           <span class="flex-1 truncate">{{ s.title }}</span>
+          <!-- unread dot -->
+          <span
+            v-if="s.hasUnread && s.id !== chatStore.activeSessionId"
+            class="w-2 h-2 rounded-full bg-red-500 flex-shrink-0"
+            title="有未读回复"
+          ></span>
           <button
             @click.stop="handleDeleteSession(s.id)"
             class="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-destructive/10 text-destructive"

@@ -2,7 +2,7 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
-import { toast } from 'vue-sonner';
+import { toast } from '../composables/use-toast';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 
@@ -17,21 +17,21 @@ const loading = ref(false);
 
 async function handleSubmit() {
   if (!username.value || !password.value) {
-    toast.error('Please fill in all fields');
+    toast.error('请填写所有字段');
     return;
   }
 
   if (!isLogin.value) {
     if (username.value.length < 3 || username.value.length > 20) {
-      toast.error('Username must be 3-20 characters');
+      toast.error('用户名需 3-20 个字符');
       return;
     }
     if (password.value.length < 6) {
-      toast.error('Password must be at least 6 characters');
+      toast.error('密码至少 6 个字符');
       return;
     }
     if (password.value !== confirmPassword.value) {
-      toast.error('Passwords do not match');
+      toast.error('两次密码不一致');
       return;
     }
   }
@@ -40,14 +40,14 @@ async function handleSubmit() {
   try {
     if (isLogin.value) {
       await authStore.login(username.value, password.value);
-      toast.success('Login successful');
+      toast.success('登录成功');
     } else {
       await authStore.register(username.value, password.value);
-      toast.success('Registration successful');
+      toast.success('注册成功');
     }
     router.push('/chat');
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Operation failed');
+    toast.error(err instanceof Error ? err.message : '操作失败');
   } finally {
     loading.value = false;
   }
@@ -58,8 +58,8 @@ async function handleSubmit() {
   <div class="min-h-screen flex items-center justify-center bg-background px-4">
     <div class="w-full max-w-sm space-y-6">
       <div class="text-center">
-        <h1 class="text-3xl font-bold text-foreground">MockForge</h1>
-        <p class="mt-2 text-sm text-muted-foreground">AI-driven Mock API Platform</p>
+        <h1 class="text-3xl font-bold text-foreground">AI Mock</h1>
+        <p class="mt-2 text-sm text-muted-foreground">AI 驱动的 Mock API 平台</p>
       </div>
 
       <!-- Tab switch -->
@@ -69,50 +69,50 @@ async function handleSubmit() {
           class="flex-1 py-2 text-sm font-medium transition-colors border-b-2"
           :class="isLogin ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
         >
-          Login
+          登录
         </button>
         <button
           @click="isLogin = false"
           class="flex-1 py-2 text-sm font-medium transition-colors border-b-2"
           :class="!isLogin ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
         >
-          Register
+          注册
         </button>
       </div>
 
       <form @submit.prevent="handleSubmit" class="space-y-4">
         <div>
-          <label class="text-sm font-medium text-foreground">Username</label>
+          <label class="text-sm font-medium text-foreground">用户名</label>
           <Input
             v-model="username"
             type="text"
-            placeholder="Enter username"
+            placeholder="请输入用户名"
             class="mt-1"
           />
         </div>
 
         <div>
-          <label class="text-sm font-medium text-foreground">Password</label>
+          <label class="text-sm font-medium text-foreground">密码</label>
           <Input
             v-model="password"
             type="password"
-            placeholder="Enter password"
+            placeholder="请输入密码"
             class="mt-1"
           />
         </div>
 
         <div v-if="!isLogin">
-          <label class="text-sm font-medium text-foreground">Confirm Password</label>
+          <label class="text-sm font-medium text-foreground">确认密码</label>
           <Input
             v-model="confirmPassword"
             type="password"
-            placeholder="Confirm password"
+            placeholder="请再次输入密码"
             class="mt-1"
           />
         </div>
 
         <Button type="submit" class="w-full" :disabled="loading">
-          {{ loading ? 'Processing...' : (isLogin ? 'Login' : 'Register') }}
+          {{ loading ? '处理中...' : (isLogin ? '登录' : '注册') }}
         </Button>
       </form>
     </div>

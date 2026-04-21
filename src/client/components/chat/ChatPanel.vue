@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import MessageList from './MessageList.vue';
 import ChatInput from './ChatInput.vue';
+import type { DisplayMessage } from '../../stores/chat';
 
 defineProps<{
-  messages: { role: string; content: string }[];
+  messages: DisplayMessage[];
   loading?: boolean;
 }>();
 

@@ -1,3 +1,11 @@
+// Setup HTTP proxy for AI API calls (needed in China for Google/OpenAI)
+import { ProxyAgent, setGlobalDispatcher } from 'undici';
+const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy;
+if (proxyUrl) {
+  setGlobalDispatcher(new ProxyAgent(proxyUrl));
+  console.log(`Using proxy: ${proxyUrl}`);
+}
+
 import app from './app.js';
 import { initDatabase, db } from './core/database.js';
 import { users, providers } from './core/schema.js';

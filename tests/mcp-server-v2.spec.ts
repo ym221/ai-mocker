@@ -300,6 +300,43 @@ test.describe('MCP v2 — 轻量写工具', () => {
     await client.close();
   });
 
+  test('M30 tools/list 返回所有 12 个工具名', async () => {
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const list = await client.listTools();
+    const names = list.tools.map((t) => t.name).sort();
+    expect(names).toEqual([
+      'create_module_from_spec',
+      'delete_module',
+      'diff_with_openapi',
+      'generate_handoff_report',
+      'get_api_doc',
+      'get_mock_access_log',
+      'get_module_health',
+      'get_openapi',
+      'list_modules',
+      'manage_data',
+      'run_test',
+      'update_module',
+    ]);
+    await client.close();
+  });
+
+  test('M31 guide resource 已更新，提及新工具名', async () => {
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const guide = await client.readResource({ uri: 'mockforge://guide' });
+    const text = (guide.contents[0] as any).text as string;
+    expect(text).toContain('create_module_from_spec');
+    expect(text).toContain('update_module');
+    expect(text).toContain('get_mock_access_log');
+    expect(text).toContain('diff_with_openapi');
+    expect(text).toContain('generate_handoff_report');
+    // 不该再提到 "v1 只读"
+    expect(text).not.toMatch(/v1[：:].*只读/);
+    await client.close();
+  });
+
   test('M28 generate_handoff_report 含核心 section', async () => {
     // 确保有几条访问记录
     await fetch('http://localhost:3000/mock/user');

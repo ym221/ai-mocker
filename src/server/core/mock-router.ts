@@ -214,13 +214,40 @@ export default async function mockRouter(app: FastifyInstance) {
         }
       });
 
-      // Set response headers
+      // ========== Response processing (priority order) ==========
+      // 1) __mock__ escape hatch — fully custom response
+      // 2) statusCode field — explicit status override
+      // 3) default — 200 with body as-is
+      //
+      // NOTE: controller's return value is AUTHORITATIVE. mock-router does not
+      // interpret `success:false` as an error — business-validation failures,
+      // conflicts, not-found etc. are all decided by controller via statusCode.
+
+      if (result && typeof result === 'object' && '__mock__' in result) {
+        const mock = (result as { __mock__: { status?: number; headers?: Record<string, string>; body?: unknown } }).__mock__;
+        const status = mock.status ?? 200;
+        if (mock.headers) {
+          for (const [k, v] of Object.entries(mock.headers)) reply.header(k, v);
+        }
+        // Only set default Content-Type if caller didn't set one
+        if (!reply.getHeader('Content-Type')) {
+          reply.header('Content-Type', 'application/json; charset=utf-8');
+        }
+        loggedResponseBody = mock.body ?? null;
+        return reply.status(status).send(mock.body ?? null);
+      }
+
+      // Default content type for JSON responses
       reply.header('Content-Type', 'application/json; charset=utf-8');
 
-      // Check if result indicates an error
-      if (result && typeof result === 'object' && 'success' in result && !(result as { success: boolean }).success) {
-        loggedResponseBody = result;
-        return reply.status(404).send(result);
+      if (result && typeof result === 'object' && 'statusCode' in result) {
+        const status = Number((result as { statusCode: unknown }).statusCode);
+        if (!isNaN(status) && status >= 100 && status < 600) {
+          // Strip statusCode from body so it doesn't leak into the JSON payload
+          const { statusCode: _sc, ...body } = result as Record<string, unknown>;
+          loggedResponseBody = body;
+          return reply.status(status).send(body);
+        }
       }
 
       loggedResponseBody = result;

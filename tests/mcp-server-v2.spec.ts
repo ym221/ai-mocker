@@ -300,6 +300,39 @@ test.describe('MCP v2 — 轻量写工具', () => {
     await client.close();
   });
 
+  test('M28 generate_handoff_report 含核心 section', async () => {
+    // 确保有几条访问记录
+    await fetch('http://localhost:3000/mock/user');
+    await fetch('http://localhost:3000/mock/user/99999');  // probably 404
+    await new Promise((r) => setTimeout(r, 150));
+
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const r = await client.callTool({
+      name: 'generate_handoff_report',
+      arguments: { moduleName: 'user' },
+    });
+    const sc = (r as any).structuredContent as { markdown: string; stats: any };
+    expect(sc.markdown).toContain('# 用户管理 Mock 交接报告');
+    expect(sc.markdown).toContain('## 契约概要');
+    expect(sc.markdown).toContain('## 模块健康状态');
+    expect(sc.markdown).toContain('## 访问日志摘要');
+    expect(sc.markdown).toContain('## 后端交接建议');
+    expect(sc.stats.endpointCount).toBeGreaterThan(0);
+    await client.close();
+  });
+
+  test('M29 generate_handoff_report 不存在模块返回 isError', async () => {
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const r = await client.callTool({
+      name: 'generate_handoff_report',
+      arguments: { moduleName: 'ghost' },
+    });
+    expect((r as any).isError).toBe(true);
+    await client.close();
+  });
+
   test('M27 update_module 对不存在模块返回 isError', async () => {
     const key = await generateApiKey();
     const client = await connect(key);

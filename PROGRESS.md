@@ -8,7 +8,7 @@
 | 3 | 前端 — 对话 | ✅ 完成 |
 | 4 | 前端 — 模块管理 | ✅ 完成 |
 | 5 | 增强 | ✅ 完成 |
-| 6 | MCP 集成 | 🚧 进行中（Step-MCP-1 ✅）|
+| 6 | MCP 集成 | ✅ 完成（Step-MCP-1 + Step-MCP-2）|
 
 ## Phase 1：项目基础
 
@@ -75,6 +75,19 @@
 - Settings 页新增「API Keys」Tab，一次性明文展示 + MCP 配置片段复制
 - 3 只读工具（list_modules / get_api_doc / get_openapi）+ `mockforge://guide` Resource
 - 完整回归 245 passed，MCP 新增 10 条 + UI 4 条全绿
+- 详见 `CURSOR.md` 对应章节
+
+### Step-MCP-2: MCP 全读写能力 + 业务侧感知 + 交接报告 ✅
+- MCP 工具总数增至 **12 个**：6 读（新增 get_mock_access_log / get_module_health / diff_with_openapi）、5 写（delete_module / run_test / manage_data / create_module_from_spec / update_module）、1 汇报（generate_handoff_report）
+- 新增基础设施：
+  - `core/access-log.ts` — /mock/* 请求持久化，每用户滚动 cap 10000
+  - `mcp/lib/headless-session.ts` — 桥接 ChatRunner，让 MCP 开的 session 写入共享 sessions 表（Web UI 可接管）
+  - `mcp/lib/retry-counter.ts` — 软 warnings
+- `core/openapi-export.ts` — 自动给实体注入 id/created_at/updated_at
+- `core/mock-router.ts` — 用 reply.raw 'close' 钩子非侵入记录 access log
+- create/update 工具支持 **MCP progress notifications** 和 **dry_run** 预览
+- `generate_handoff_report` 输出结构化 markdown（契约 + 健康 + 访问日志 + 后端建议）
+- 新增 30 条测试（mock-access-log L01-L05、mcp-server-v2 M11-M32、mcp-headless-session H01-H02、mcp-retry-counter R01-R04）；M25/M32 用 admin 免费 gemma 真实调 LLM 验证
 - 详见 `CURSOR.md` 对应章节
 
 ## 关键决策记录

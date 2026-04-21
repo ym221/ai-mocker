@@ -108,12 +108,15 @@ test.describe('MCP Server — 基础协议', () => {
     await client.close();
   });
 
-  test('M03 tools/list 包含 3 个预期工具', async () => {
+  test('M03 tools/list 至少包含 3 个 v1 读工具（v2 扩展后仍兼容）', async () => {
     const key = await generateApiKeyFor('admin', 'admin123');
     const client = await connectClient(key);
     const list = await client.listTools();
-    const names = list.tools.map((t) => t.name).sort();
-    expect(names).toEqual(['get_api_doc', 'get_openapi', 'list_modules']);
+    const names = list.tools.map((t) => t.name);
+    // v1 read-only baseline 必须仍存在
+    expect(names).toContain('get_api_doc');
+    expect(names).toContain('get_openapi');
+    expect(names).toContain('list_modules');
     await client.close();
   });
 });
@@ -180,8 +183,6 @@ test.describe('MCP Server — Resource', () => {
     const text = (read.contents[0] as any).text as string;
     expect(text).toContain('MockForge MCP');
     expect(text).toContain('list_modules');
-    // v1 只读边界：不能提到尚未存在的写工具
-    expect(text).not.toContain('create_module_from_spec');
     await client.close();
   });
 });

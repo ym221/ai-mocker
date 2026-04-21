@@ -2,7 +2,7 @@
 
 ## 当前位置
 - **Phase**: ALL COMPLETE
-- **状态**: Step-MCP-1 完成（MCP Server 只读骨架上线）
+- **状态**: Step-MCP-2 完成（MCP 全功能上线：写工具 + 业务侧感知 + 交接报告）
 
 ## 已完成 Step
 - [x] Step 1: 项目初始化 (d759059)
@@ -29,6 +29,7 @@
 - [x] **Step-UX-Polish-4**: error 事件 streamDone 修复 + 列表 in-place merge + card 时序+样式 + ThinkingParser &lt;thinking&gt; 支持 + 模块健康度派生 + 重新生成按钮
 - [x] **Step-UX-Polish-5**: 统一 Toast 封装 + send() 兜底 + isGenerating 启发式 + 数据表自愈 + AI 测试规范强化
 - [x] **Step-MCP-1**: MCP Server 只读骨架 — API Key 鉴权 + HTTP Streamable Transport + 3 只读工具 + guide Resource + Settings API Keys Tab
+- [x] **Step-MCP-2**: MCP 写能力 + 业务侧感知 + 交接报告 — 12 个 MCP 工具全集 + access log + progress notifications + 软 warnings + dry_run + handoff report + headless-session 桥接
 
 ## Step-Chat-Resumable 变更摘要
 计划文档: `plans/STEP-CHAT-RESUMABLE-PLAN.md`
@@ -271,5 +272,49 @@
 - access_log / diff_with_openapi → 下一 Step
 - stdio transport → v3 或永不做
 
+## Step-MCP-2 变更摘要
+目标：把 MockForge 完整读写能力通过 MCP 暴露，让 IDE AI 能跑完"PRD → 契约 → Mock → 业务代码 → 自测 → 修复 → 交接"全闭环。
+
+### 新增工具（9 个，合计 MCP 工具 12 个）
+- **业务侧感知（读）**
+  - `get_mock_access_log` — 查某模块最近 N 次 `/mock/*` 请求（method/path/status/duration/body）
+  - `get_module_health` — 独立诊断工具，返回 health/missingFiles/hasTable/tableName
+  - `diff_with_openapi` — 递归比 actualRequest/Response 与 OpenAPI，输出 5 种 diff kinds
+- **轻量写（即时生效）**
+  - `delete_module` — 不可逆删模块（drop 表 + 删文件 + 清 modules 行）
+  - `run_test` — 跑 module/test.ts 全 CRUD 回归
+  - `manage_data` — insert/update/delete/batch_delete/clear/list/bulk_generate
+- **重量写（桥接 ChatRunner，~30s-3min）**
+  - `create_module_from_spec` — OpenAPI/YAML/自然语言 → 生成模块；支持 dry_run
+  - `update_module` — 自然语言指令修改模块；返回 +/- entity/field/endpoint diff；支持 dry_run
+- **汇报**
+  - `generate_handoff_report` — 契约 + 健康 + 访问日志 + 后端建议的交接 markdown
+
+### 新增基础设施
+- `src/server/core/access-log.ts` — 记录每次 /mock/* 请求到 mock_requests 表；8KB body 截断；每用户滚动 cap 10000 条
+- `src/server/mcp/lib/headless-session.ts` — MCP 写工具桥接 ChatRunner；provider 选择优先 scope=public（免费默认模型）→ 私有兜底；AsyncLocalStorage + AbortSignal；onProgress 只转发阶段摘要（不泄漏 LLM 内容）
+- `src/server/mcp/lib/retry-counter.ts` — 24h 窗口 per-user:module:tool 计数；阈值 10 触发软 warning；不阻断调用
+
+### 关键修改
+- `src/server/core/mock-router.ts` — 每个 /mock/* 请求都 recordMockAccess；闭包收集 request/response body，finalize 在 reply.raw 'close' 事件触发
+- `src/server/core/openapi-export.ts` — 为所有实体自动注入 id/created_at/updated_at 字段（反映 Mock 表实际结构，diff 工具才准）
+- `src/server/mcp/resources/guide.ts` — 完全重写，含 12 工具决策树、推荐 9 步工作流、progress/warnings/dry_run 语义
+
+### 测试
+- `tests/mock-access-log.spec.ts` — L01-L05（插入/响应体/请求体/截断/滚动 cap）
+- `tests/mcp-server-v2.spec.ts` — M11-M32 共 22 条（只读增强 / diff / 轻量写 / 重量写 / 交接 / guide / 真实 LLM）
+- `tests/mcp-headless-session.spec.ts` — H01-H02（__fake__ 流 + 无 provider 错误）
+- `tests/mcp-retry-counter.spec.ts` — R01-R04
+- 其中 **M25/M32 用 admin 配置的免费 gemma provider 真跑 LLM**，用户明确确认允许消耗
+
+### 架构要点
+- **MCP 开的 session 写入共享 sessions 表**：Web UI 天然可见 + 可接管；会话标题 `[MCP] create xxx` / `[MCP] update xxx`
+- **stateless per-request McpServer**：每个 MCP 请求新建实例 + transport，用户上下文 AsyncLocalStorage 注入
+- **access log 不阻塞响应**：reply.raw 'close' 事件异步记录；失败吞掉
+- **滚动 cap 10000/user**：每 100 次 insert 触发一次 trim（DELETE WHERE id NOT IN (最新 10000)），均摊成本低
+
+### 已知 flaky
+- `tests/mcp-server-v2.spec.ts` M32 `update_module 真实修改`：gemma 在 update 分支延迟偏大，setTimeout=300s 下偶尔需 retry。Playwright retries 策略使其最终绿（同 R11b 先例处理），不阻塞 CI
+
 ## 下一步
-Step-MCP-2（写工具 + 业务侧感知），进入时读 `plans/STEP-MCP-2-PLAN.md`（尚未生成）。
+Phase 6 已完成（MCP-1 + MCP-2）。若未来需要：细粒度权限 Key（只读/写分级）、stdio transport、sampling-based 生成优化，再开 Step-MCP-3。

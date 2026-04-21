@@ -22,6 +22,7 @@ import uploadRoutes from './api/upload.js';
 import dataRoutes from './api/data.js';
 import testRoutes from './api/test.js';
 import userRoutes from './api/users.js';
+import apiKeyRoutes from './api/api-keys.js';
 import mockRouter from './core/mock-router.js';
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -83,6 +84,7 @@ async function start() {
     await app.register(dataRoutes);
     await app.register(testRoutes);
     await app.register(userRoutes);
+    await app.register(apiKeyRoutes);
     await app.register(mockRouter);
 
     await app.listen({ port: PORT, host: HOST });

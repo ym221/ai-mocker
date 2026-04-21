@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently \"pnpm dev:server\" \"pnpm dev:client\"",
-    "dev:server": "tsx watch --env-file .env src/server/server.ts",
+    "dev:server": "tsx watch --ignore=./generated/** --ignore=./data/** --ignore=./uploads/** --env-file .env src/server/server.ts",
     "dev:client": "vite",
     "build": "vite build && tsc -p tsconfig.server.json",
     "start": "node dist/server/server.js"

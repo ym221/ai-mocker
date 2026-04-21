@@ -129,16 +129,31 @@ export default async function chatRoutes(app: FastifyInstance) {
     if (runner) {
       await streamSubscribe(runner, afterSeq, reply, request);
     } else {
-      // No live runner: just replay DB history then end
+      // No live runner: replay DB history, then synthesize a terminal event if the
+      // last event in the log isn't already terminal (prevents frontend from hanging
+      // on a "进行中..." state for sessions interrupted by a server restart).
       const { sqlite } = await import('../core/database.js');
       const rows = sqlite.prepare(
         `SELECT seq, type, payload, created_at FROM message_events
          WHERE session_id = ? AND seq > ? ORDER BY seq`
       ).all(q.sessionId, afterSeq) as { seq: number; type: string; payload: string; created_at: string }[];
+      let lastType: string | undefined;
+      let lastSeq = afterSeq;
       for (const r of rows) {
         let payload: unknown = {};
         try { payload = JSON.parse(r.payload); } catch {}
         writeEvent(reply, { seq: r.seq, type: r.type as any, payload: payload as any, createdAt: r.created_at });
+        lastType = r.type;
+        lastSeq = r.seq;
+      }
+      const isTerminal = lastType && ['done', 'error', 'aborted', 'paused'].includes(lastType);
+      if (!isTerminal && rows.length > 0) {
+        // synthetic terminal so client can collapse "进行中" UI
+        writeEvent(reply, {
+          seq: lastSeq + 1,
+          type: 'aborted',
+          payload: { reason: 'no_live_runner_on_replay' },
+        });
       }
       try { reply.raw.end(); } catch {}
     }

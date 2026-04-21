@@ -162,7 +162,43 @@ export function initDatabase() {
   // Index for O(1) hash lookup
   sqlite.exec("CREATE INDEX IF NOT EXISTS users_api_key_hash_idx ON users (api_key_hash)");
 
-  // Any session that was left 'running' after a restart is definitely not running anymore
+  // Any session that was left running (or was never properly finalized due to a crash /
+  // dev-server restart loop / force-kill) needs a terminal event appended so subscribers
+  // don't silently hang on the last thinking/tool_call event.
+  //
+  // Coverage:
+  //  - run_status='running'    → always finalize (runner is definitely dead post-restart)
+  //  - run_status='idle' etc.  → finalize only if the LAST event isn't terminal
+  //    (covers previously-restarted sessions whose run_status was reset to idle but whose
+  //     event log was left in a non-terminal state)
+  const candidates = sqlite.prepare(
+    `SELECT id, last_seq, run_status FROM sessions WHERE run_status IS NOT NULL`
+  ).all() as { id: string; last_seq: number | null; run_status: string }[];
+  for (const s of candidates) {
+    const lastEvent = sqlite.prepare(
+      `SELECT type FROM message_events WHERE session_id = ? ORDER BY seq DESC LIMIT 1`
+    ).get(s.id) as { type: string } | undefined;
+    if (!lastEvent) continue; // Session never produced events; leave alone
+    const isTerminal = ['done', 'error', 'aborted', 'paused'].includes(lastEvent.type);
+    if (isTerminal) continue;
+    // Either still 'running' or non-terminal tail → append synthetic aborted event
+    const nextSeq = (s.last_seq ?? 0) + 1;
+    const lastAssistant = sqlite.prepare(
+      `SELECT id FROM messages WHERE session_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1`
+    ).get(s.id) as { id: number } | undefined;
+    sqlite.prepare(
+      `INSERT INTO message_events (session_id, message_id, seq, type, payload)
+       VALUES (?, ?, ?, 'aborted', ?)`
+    ).run(s.id, lastAssistant?.id ?? null, nextSeq, JSON.stringify({ reason: 'server_restart' }));
+    if (lastAssistant) {
+      sqlite.prepare(
+        `UPDATE messages SET finalized_at = datetime('now') WHERE id = ? AND finalized_at IS NULL`
+      ).run(lastAssistant.id);
+    }
+    sqlite.prepare(
+      `UPDATE sessions SET last_seq = ? WHERE id = ?`
+    ).run(nextSeq, s.id);
+  }
   sqlite.exec("UPDATE sessions SET run_status = 'idle' WHERE run_status = 'running'");
   // Any module left 'creating'/'editing' after restart: treat as interrupted;
   // the proper status will be re-derived from health on next inspection.

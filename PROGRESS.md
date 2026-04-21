@@ -8,6 +8,7 @@
 | 3 | 前端 — 对话 | ✅ 完成 |
 | 4 | 前端 — 模块管理 | ✅ 完成 |
 | 5 | 增强 | ✅ 完成 |
+| 6 | MCP 集成 | 🚧 进行中（Step-MCP-1 ✅）|
 
 ## Phase 1：项目基础
 
@@ -65,8 +66,22 @@
 ### Step 19-23: 增强功能 ✅ (eb3bc47)
 - 延迟/异常模拟 + 数据管理 API + 管理员面板 + Docker
 
+## Phase 6：MCP 集成
+
+### Step-MCP-1: MCP Server 只读骨架 ✅
+- 新目录 `src/server/mcp/`（context / auth / server / routes / tools / resources）
+- 新依赖 `@modelcontextprotocol/sdk` 1.29
+- `users` 表新增 `api_key_hash / api_key_created_at / api_key_last_used_at`
+- Settings 页新增「API Keys」Tab，一次性明文展示 + MCP 配置片段复制
+- 3 只读工具（list_modules / get_api_doc / get_openapi）+ `mockforge://guide` Resource
+- 完整回归 245 passed，MCP 新增 10 条 + UI 4 条全绿
+- 详见 `CURSOR.md` 对应章节
+
 ## 关键决策记录
 - Vite 6 而非 8（Node 20.16.0 兼容性）
 - Tailwind 3 而非 4（同上）
 - shadcn-vue 组件手动创建（corepack 兼容性问题）
 - 使用 --env-file .env 加载环境变量
+- MCP API Key 用 HMAC-SHA256 而非 bcrypt（O(1) 查询 vs 全表扫描）
+- MCP 用 stateless StreamableHTTPServerTransport + per-request McpServer（简单安全）
+- 用户上下文经 AsyncLocalStorage 注入（复用项目既有 BaseModel 模式）

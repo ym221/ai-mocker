@@ -2,7 +2,7 @@
 
 ## 当前位置
 - **Phase**: ALL COMPLETE
-- **状态**: Step-UX-Polish-5 完成
+- **状态**: Step-MCP-1 完成（MCP Server 只读骨架上线）
 
 ## 已完成 Step
 - [x] Step 1: 项目初始化 (d759059)
@@ -28,6 +28,7 @@
 - [x] **Step-UX-Polish-3**: 打字机效果 + startedAt 计时 + 思考内容隐藏 + 文档下载/复制/OpenAPI + 模块状态机 + 超时熔断 + 进度条移除
 - [x] **Step-UX-Polish-4**: error 事件 streamDone 修复 + 列表 in-place merge + card 时序+样式 + ThinkingParser &lt;thinking&gt; 支持 + 模块健康度派生 + 重新生成按钮
 - [x] **Step-UX-Polish-5**: 统一 Toast 封装 + send() 兜底 + isGenerating 启发式 + 数据表自愈 + AI 测试规范强化
+- [x] **Step-MCP-1**: MCP Server 只读骨架 — API Key 鉴权 + HTTP Streamable Transport + 3 只读工具 + guide Resource + Settings API Keys Tab
 
 ## Step-Chat-Resumable 变更摘要
 计划文档: `plans/STEP-CHAT-RESUMABLE-PLAN.md`
@@ -229,5 +230,46 @@
 - 回归：step-ux-polish-3 (10) + polish-4 (7) + polish-5 (8) + thinking-parser (10) + chat-resumable (7) + page-chat (22) + page-modules (12) + navigation (14) + e2e-flows (8) = 96 passed
 - 已知无关失败：api-data.spec.ts 10 条（用 MODULE='user' 但该 fixture 在当前 DB 环境中缺失，与本次变更无关）
 
+## Step-MCP-1 变更摘要
+目标：把 MockForge 对外暴露为 MCP Server，让 IDE（Cursor / Claude Code）里的 AI 能直接访问 Mock 模块。
+
+### 新增
+- `src/server/core/api-key.ts` — HMAC-SHA256 API Key 生成/查找；`MCP_API_KEY_SECRET` 缺失时自动生成写回 .env
+- `src/server/core/openapi-export.ts` — 从 `_meta.json` 构造 OpenAPI 3.0.3（供 MCP + 未来前端统一复用）
+- `src/server/api/api-keys.ts` — `/api/users/me/api-key` GET / POST / DELETE（JWT 保护）
+- `src/server/mcp/`
+  - `context.ts` — AsyncLocalStorage 承载 per-request MCP 用户上下文
+  - `auth.ts` — `X-API-Key` / Bearer 鉴权解析
+  - `server.ts` — per-request McpServer 工厂（stateless）
+  - `routes.ts` — Fastify 插件挂 `/mcp`（POST/GET/DELETE）
+  - `tools/list-modules.ts` — 返回 name/status/health/endpoints/mockBaseUrl
+  - `tools/get-api-doc.ts` — 读 api-doc.md，友好 isError
+  - `tools/get-openapi.ts` — 输出 OpenAPI JSON + structuredContent
+  - `resources/guide.ts` — `mockforge://guide` 使用指南（v1 只读边界明示）
+- `docs/mcp-usage.md` — Cursor / Claude Code 配置、常见问题、安全考虑、路线图
+- `tests/mcp-server.spec.ts` — 10 条集成测试（M01-M10）+ tests/page-settings-apikeys.spec.ts 4 条 UI 测试
+
+### 修改
+- `src/server/core/schema.ts` + `database.ts` — users 表加 `api_key_hash / api_key_created_at / api_key_last_used_at`；index on api_key_hash
+- `src/server/server.ts` — 注册 `apiKeyRoutes` 和 `mcpRoutes`
+- `src/client/pages/SettingsPage.vue` — 第三个 Tab "API Keys"：生成 / 重新生成 / 吊销；一次性明文 Dialog；MCP 配置片段块
+- `.env.example` + `.env` — 加 `MCP_API_KEY_SECRET`
+
+### 测试结果
+- `tests/mcp-server.spec.ts`: 10/10 ✅（M01 鉴权、M02 握手、M03 工具发现、M04-M07 工具行为、M08 resource、M09 lastUsedAt、M10 用户隔离）
+- `tests/page-settings-apikeys.spec.ts`: 4/4 ✅（A01-A04 空态/生成/吊销/重新生成）
+- **完整回归**: 245 passed / 1 flaky (R11b navigation, retries 通过) / 3 skipped / 0 failed（含所有新增 14 条）
+
+### 架构要点
+- **stateless HTTP Transport**：每个请求新建 McpServer 实例 + transport，连接结束即销毁
+- **用户上下文**：`mcpUserContext.run()` 包一层，tool handler 内 `getMcpUserId()` 取值
+- **API Key 存储**：HMAC-SHA256 hash（O(1) 等值查询）而非 bcrypt（全表扫描），但 secret 需保密
+- **Web UI + MCP 共享状态**：同一 Fastify 进程、同一 SQLite，Docker 部署天然匹配
+
+### v2/v3 预留
+- 写工具（create_module_from_spec / update_module）→ 下一 Step
+- access_log / diff_with_openapi → 下一 Step
+- stdio transport → v3 或永不做
+
 ## 下一步
-无（本次需求已完成）
+Step-MCP-2（写工具 + 业务侧感知），进入时读 `plans/STEP-MCP-2-PLAN.md`（尚未生成）。

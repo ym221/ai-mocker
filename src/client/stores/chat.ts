@@ -237,14 +237,40 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function createSession(options?: { providerId?: number; presetId?: number; moduleName?: string }) {
+  async function createSession(options?: {
+    providerId?: number | null;
+    presetId?: number | null;
+    model?: string | null;
+    moduleName?: string;
+  }) {
     const api = useApi();
-    const res = await api.post<{ success: boolean; data: Session }>('/api/sessions', {
-      title: '新对话',
-      ...options,
-    });
+    // Strip nulls so backend validation doesn't treat them as explicit set-to-null
+    const body: Record<string, unknown> = { title: '新对话' };
+    if (options) {
+      if (options.providerId != null) body.providerId = options.providerId;
+      if (options.presetId != null) body.presetId = options.presetId;
+      if (options.model != null) body.model = options.model;
+      if (options.moduleName) body.moduleName = options.moduleName;
+    }
+    const res = await api.post<{ success: boolean; data: Session }>('/api/sessions', body);
     sessions.value.unshift(res.data);
     activeSessionId.value = res.data.id;
+    return res.data;
+  }
+
+  async function updateSessionConfig(
+    id: string,
+    config: { providerId?: number | null; presetId?: number | null; model?: string | null },
+  ) {
+    const api = useApi();
+    const body: Record<string, unknown> = {};
+    // Pass through explicit nulls to clear (providerId=null → clear), but omit undefined
+    if (config.providerId !== undefined) body.providerId = config.providerId;
+    if (config.presetId !== undefined) body.presetId = config.presetId;
+    if (config.model !== undefined) body.model = config.model;
+    const res = await api.put<{ success: boolean; data: Session }>(`/api/sessions/${id}`, body);
+    const idx = sessions.value.findIndex(s => s.id === id);
+    if (idx >= 0) sessions.value[idx] = res.data;
     return res.data;
   }
 
@@ -491,5 +517,6 @@ export const useChatStore = defineStore('chat', () => {
     send,
     pause,
     markRead,
+    updateSessionConfig,
   };
 });

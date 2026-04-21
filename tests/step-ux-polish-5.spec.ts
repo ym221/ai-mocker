@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { waitForBackend, getToken, apiRequest } from './helpers';
+import { waitForBackend, getToken, apiRequest, startNewChatSession } from './helpers';
 
 test.beforeAll(async () => { await waitForBackend(); });
 
@@ -10,7 +10,7 @@ test.beforeAll(async () => { await waitForBackend(); });
 test('T5-01 POST 流自然结束后 generating-banner 消失（send finally 兜底）', async ({ page }) => {
   await page.goto('/chat');
   await page.waitForTimeout(400);
-  await page.click('text=新建对话');
+  await startNewChatSession(page);
   await page.waitForTimeout(300);
 
   const textarea = page.locator('textarea').first();
@@ -31,7 +31,7 @@ test('T5-01 POST 流自然结束后 generating-banner 消失（send finally 兜�
 test('T5-02 isGenerating 启发式：存在 modules 时视为已完成', async ({ page }) => {
   await page.goto('/chat');
   await page.waitForTimeout(400);
-  await page.click('text=新建对话');
+  await startNewChatSession(page);
   await page.waitForTimeout(300);
 
   // 发 fake，再等到流结束（包含 card 事件）

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { waitForBackend, login, expectToast } from './helpers';
+import { waitForBackend, login, expectToast, startNewChatSession } from './helpers';
 
 test.beforeAll(async () => { await waitForBackend(); });
 
@@ -10,7 +10,7 @@ test.describe('端到端业务流程', () => {
     const token = await page.evaluate(() => localStorage.getItem('mockforge_token'));
     expect(token).toBeTruthy();
     // 创建会话
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForURL(/\/chat\/.+/, { timeout: 5000 });
     // 发送消息
     const textarea = page.locator('textarea');
@@ -111,7 +111,7 @@ test.describe('端到端业务流程', () => {
     });
     // 创建
     const before = page.url();
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForFunction((prev) => location.href !== prev && /\/chat\/.+/.test(location.href), before, { timeout: 5000 });
     const sessionId = page.url().split('/chat/')[1];
     // 发消息
@@ -168,7 +168,7 @@ test.describe('端到端业务流程', () => {
     await page.goto('/chat');
     await page.waitForTimeout(500);
     // 创建会话 A — 用 __fake__ 让后端正常处理流
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForURL(/\/chat\/.+/, { timeout: 5000 });
     const idA = page.url().split('/chat/')[1];
     const textarea = page.locator('textarea');
@@ -176,7 +176,7 @@ test.describe('端到端业务流程', () => {
     await textarea.press('Enter');
     await page.waitForTimeout(2500);
     // 创建会话 B
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(600);
     await textarea.fill('__fake__ B unique');
     await textarea.press('Enter');

@@ -87,6 +87,20 @@ export async function expectToast(page: Page, text: string, timeout = 5000) {
   await toast.waitFor({ state: 'visible', timeout });
 }
 
+/**
+ * 创建新会话:点击"新建对话"按钮,等 SessionConfigDialog 弹出,点"跳过默认"以
+ * 使用系统默认 provider/preset 创建 session。适用于"不关心对话配置"的旧测试。
+ *
+ * Step-MCP-3.4 起,点"新建对话"会弹 dialog 而不是直接建 session。
+ */
+export async function startNewChatSession(page: Page) {
+  await page.click('[data-testid="new-session-btn"]');
+  await page.locator('[data-testid="session-config-dialog"]').waitFor({ state: 'visible', timeout: 5000 });
+  await page.click('[data-testid="skip-defaults-btn"]');
+  // Wait for dialog to close before returning
+  await page.locator('[data-testid="session-config-dialog"]').waitFor({ state: 'hidden', timeout: 5000 });
+}
+
 // ==================== Fixture bootstrap ====================
 
 const DB_PATH = resolve(process.cwd(), 'data', 'mockforge.db');

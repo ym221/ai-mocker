@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { waitForBackend, getToken, apiRequest } from './helpers';
+import { waitForBackend, getToken, apiRequest, startNewChatSession } from './helpers';
 
 test.beforeAll(async () => { await waitForBackend(); });
 
@@ -44,7 +44,7 @@ test('T4-01 error 事件推送后，assistant msg.streamDone=true，UI 不再显
 
   await page.goto(`/chat`);
   await page.waitForTimeout(500);
-  await page.click('text=新建对话');
+  await startNewChatSession(page);
   await page.waitForTimeout(300);
 
   // Use page.evaluate to reach the pinia store and exercise applyEvent('error')
@@ -151,7 +151,7 @@ test('T4-03 fake 流完成后，card 事件携带 active 状态（不是 creatin
 test('T4-04 注入 creating card 时，MessageBubble 徽章显示"创建中..."文字', async ({ page }) => {
   await page.goto('/chat');
   await page.waitForTimeout(500);
-  await page.click('text=新建对话');
+  await startNewChatSession(page);
   await page.waitForTimeout(400);
 
   // 直接用 page.evaluate 注入一条 assistant 消息 + module card（通过 pinia）

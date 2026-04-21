@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { waitForBackend, getToken, apiRequest } from './helpers';
+import { waitForBackend, getToken, apiRequest, startNewChatSession } from './helpers';
 
 test.beforeAll(async () => { await waitForBackend(); });
 
@@ -37,7 +37,7 @@ async function readStreamToEvents(response: Response, maxMs = 8000): Promise<any
 test('T03 生成中气泡不含 .progress-bar / .progress-track 动画', async ({ page }) => {
   await page.goto('/chat');
   await page.waitForTimeout(500);
-  await page.click('text=新建对话');
+  await startNewChatSession(page);
   await page.waitForTimeout(500);
 
   // 通过 UI 触发 fake 流
@@ -90,7 +90,7 @@ test('T02 切到其他页面再切回 chat，已用时不从 0 重置', async ({
   // 用 __fake_slow__ 让 fake 流持续 10+ 秒，保证切页期间 banner 仍可见
   await page.goto('/chat');
   await page.waitForTimeout(400);
-  await page.click('text=新建对话');
+  await startNewChatSession(page);
   await page.waitForTimeout(300);
 
   const textarea = page.locator('textarea').first();
@@ -130,7 +130,7 @@ test('T02 切到其他页面再切回 chat，已用时不从 0 重置', async ({
 test('T01 打字机效果：中途显示长度小于最终，结束后相等', async ({ page }) => {
   await page.goto('/chat');
   await page.waitForTimeout(500);
-  await page.click('text=新建对话');
+  await startNewChatSession(page);
   await page.waitForTimeout(500);
 
   const textarea = page.locator('textarea').first();

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { waitForBackend, login, expectToast } from './helpers';
+import { waitForBackend, login, expectToast, startNewChatSession } from './helpers';
 
 test.beforeAll(async () => { await waitForBackend(); });
 
@@ -25,7 +25,7 @@ test.describe('聊天页 - UI 渲染', () => {
   test('C03 空状态引导文字', async ({ page }) => {
     await page.goto('/chat');
     // 创建新会话以确保无消息
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     await expect(page.locator('h2:has-text("AI Mock")')).toBeVisible();
     await expect(page.getByText('描述你想生成的 Mock API 模块')).toBeVisible();
@@ -33,7 +33,7 @@ test.describe('聊天页 - UI 渲染', () => {
 
   test('C04 消息气泡样式', async ({ page }) => {
     await page.goto('/chat');
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     // 发送消息
     const textarea = page.locator('textarea');
@@ -51,14 +51,14 @@ test.describe('聊天页 - UI 渲染', () => {
 test.describe('聊天页 - 会话管理', () => {
   test('C05 创建新会话', async ({ page }) => {
     await page.goto('/chat');
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     await expect(page).toHaveURL(/\/chat\/.+/);
   });
 
   test('C06 新会话默认标题', async ({ page }) => {
     await page.goto('/chat');
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     // 侧边栏应有会话项
     const sessionItems = page.locator('.w-56 .truncate');
@@ -71,12 +71,12 @@ test.describe('聊天页 - 会话管理', () => {
     await page.waitForTimeout(800);
     const beforeA = page.url();
     // 创建会话 A
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForFunction((prev) => location.href !== prev && /\/chat\/.+/.test(location.href), beforeA, { timeout: 5000 });
     const idA = page.url().split('/chat/')[1];
     const beforeB = page.url();
     // 创建会话 B
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForFunction((prev) => location.href !== prev && /\/chat\/.+/.test(location.href), beforeB, { timeout: 5000 });
     const idB = page.url().split('/chat/')[1];
     expect(idA).not.toBe(idB);
@@ -95,7 +95,7 @@ test.describe('聊天页 - 会话管理', () => {
     await page.goto('/chat');
     await page.waitForTimeout(800);
     const before = page.url();
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForFunction((prev) => location.href !== prev && /\/chat\/.+/.test(location.href), before, { timeout: 5000 });
     const currentId = page.url().split('/chat/')[1];
     const activeSession = page.locator('.w-56 .bg-accent').first();
@@ -125,7 +125,7 @@ test.describe('聊天页 - 会话管理', () => {
     await page.reload();
     await page.waitForTimeout(800);
     // 创建唯一一个会话
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForURL(/\/chat\/.+/, { timeout: 5000 });
     await page.waitForTimeout(500);
     // 删除它
@@ -141,9 +141,9 @@ test.describe('聊天页 - 会话管理', () => {
 
   test('C10 会话高亮状态', async ({ page }) => {
     await page.goto('/chat');
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForURL(/\/chat\/.+/, { timeout: 5000 });
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     // 活跃会话有 bg-accent class
     const activeSession = page.locator('.w-56 .bg-accent');
@@ -156,7 +156,7 @@ test.describe('聊天页 - 会话管理', () => {
 test.describe('聊天页 - 消息发送', () => {
   test('C11 输入文字发送', async ({ page }) => {
     await page.goto('/chat');
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     const textarea = page.locator('textarea');
     await textarea.fill('Hello test message C11');
@@ -169,7 +169,7 @@ test.describe('聊天页 - 消息发送', () => {
 
   test('C12 Shift+Enter 换行', async ({ page }) => {
     await page.goto('/chat');
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     const textarea = page.locator('textarea');
     await textarea.fill('line1');
@@ -185,7 +185,7 @@ test.describe('聊天页 - 消息发送', () => {
 
   test('C13 空输入发送按钮禁用', async ({ page }) => {
     await page.goto('/chat');
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     const sendBtn = page.locator('[title="发送消息"]');
     await expect(sendBtn).toBeDisabled();
@@ -193,7 +193,7 @@ test.describe('聊天页 - 消息发送', () => {
 
   test('C14 有输入时发送按钮启用', async ({ page }) => {
     await page.goto('/chat');
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     const textarea = page.locator('textarea');
     await textarea.fill('some text');
@@ -203,7 +203,7 @@ test.describe('聊天页 - 消息发送', () => {
 
   test('C15 textarea 自动扩高', async ({ page }) => {
     await page.goto('/chat');
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     const textarea = page.locator('textarea');
     const heightBefore = await textarea.evaluate(el => el.offsetHeight);
@@ -220,7 +220,7 @@ test.describe('聊天页 - 消息发送', () => {
 test.describe('聊天页 - 加载状态', () => {
   test('C16 发送后 loading 态', async ({ page }) => {
     await page.goto('/chat');
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     // 拦截 chat API 延迟响应
     await page.route('**/api/chat', async (route) => {
@@ -238,7 +238,7 @@ test.describe('聊天页 - 加载状态', () => {
 
   test('C17 停止生成', async ({ page }) => {
     await page.goto('/chat');
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     // 拦截 chat API 无限等待
     await page.route('**/api/chat', async (route) => {
@@ -261,7 +261,7 @@ test.describe('聊天页 - 加载状态', () => {
 
   test('C18 消息自动滚动', async ({ page }) => {
     await page.goto('/chat');
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     // 发送消息后检查滚动容器
     const textarea = page.locator('textarea');
@@ -285,7 +285,7 @@ test.describe('聊天页 - 文件上传', () => {
 
   test('C20 附件预览显示', async ({ page }) => {
     await page.goto('/chat');
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     // 模拟文件上传 API
     await page.route('**/api/upload', async (route) => {
@@ -312,7 +312,7 @@ test.describe('聊天页 - 文件上传', () => {
 
   test('C21 移除附件', async ({ page }) => {
     await page.goto('/chat');
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     await page.route('**/api/upload', async (route) => {
       await route.fulfill({
@@ -340,7 +340,7 @@ test.describe('聊天页 - 文件上传', () => {
 
   test('C22 有附件时发送按钮启用', async ({ page }) => {
     await page.goto('/chat');
-    await page.click('text=新建对话');
+    await startNewChatSession(page);
     await page.waitForTimeout(500);
     await page.route('**/api/upload', async (route) => {
       await route.fulfill({

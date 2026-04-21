@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, watch } from 'vue';
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useChatStore } from '../stores/chat';
 import ChatPanel from '../components/chat/ChatPanel.vue';
+import SessionConfigDialog, { type SessionConfigValue } from '../components/chat/SessionConfigDialog.vue';
 import { Button } from '../components/ui/button';
 import { Plus, Trash2, MessageSquare } from 'lucide-vue-next';
 
@@ -13,6 +14,50 @@ const chatStore = useChatStore();
 const displayMessages = computed(() => chatStore.activeStream?.messages ?? []);
 const isLoading = computed(() => chatStore.activeStream?.status === 'running' || chatStore.activeStream?.status === 'connecting');
 
+// ==================== New-session dialog ====================
+
+const LS_KEY = 'mockforge.session-config.lastUsed';
+
+function readLastUsed(): Partial<SessionConfigValue> | null {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      providerId: typeof parsed.providerId === 'number' ? parsed.providerId : null,
+      model: typeof parsed.model === 'string' ? parsed.model : null,
+      presetId: typeof parsed.presetId === 'number' ? parsed.presetId : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeLastUsed(cfg: SessionConfigValue): void {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); } catch { /* quota / privacy mode */ }
+}
+
+const configDialogOpen = ref(false);
+const configDialogInitial = ref<Partial<SessionConfigValue> | null>(null);
+
+function openNewSessionDialog() {
+  configDialogInitial.value = readLastUsed();
+  configDialogOpen.value = true;
+}
+
+async function handleConfigConfirm(cfg: SessionConfigValue) {
+  writeLastUsed(cfg);
+  const session = await chatStore.createSession({
+    providerId: cfg.providerId,
+    presetId: cfg.presetId,
+    model: cfg.model,
+  });
+  await selectSession(session.id);
+}
+
+// ==================== Session nav ====================
+
 async function selectSession(sessionId: string) {
   chatStore.activeSessionId = sessionId;
   await router.push(`/chat/${sessionId}`);
@@ -20,10 +65,8 @@ async function selectSession(sessionId: string) {
   if (!s.loaded && !s.abortController) {
     chatStore.connect(sessionId);
   } else if (!s.abortController) {
-    // reconnect to catch any new events since last disconnect
     chatStore.connect(sessionId);
   }
-  // clear unread
   const sess = chatStore.sessions.find(x => x.id === sessionId);
   if (sess?.hasUnread) chatStore.markRead(sessionId);
 }
@@ -31,7 +74,12 @@ async function selectSession(sessionId: string) {
 async function handleSend(message: string) {
   let sid = chatStore.activeSessionId;
   if (!sid) {
-    const session = await chatStore.createSession();
+    const last = readLastUsed();
+    const session = await chatStore.createSession({
+      providerId: last?.providerId ?? null,
+      presetId: last?.presetId ?? null,
+      model: last?.model ?? null,
+    });
     sid = session.id;
     await selectSession(sid);
   }
@@ -40,11 +88,6 @@ async function handleSend(message: string) {
 
 function handleStop() {
   if (chatStore.activeSessionId) chatStore.pause(chatStore.activeSessionId);
-}
-
-async function handleNewChat() {
-  const session = await chatStore.createSession();
-  await selectSession(session.id);
 }
 
 async function handleDeleteSession(id: string) {
@@ -73,7 +116,6 @@ onMounted(async () => {
     await selectSession(first);
   }
 
-  // Poll sessions every 5s for unread updates
   pollTimer = setInterval(async () => {
     try { await chatStore.fetchSessions(); } catch {}
   }, 5000);
@@ -97,7 +139,7 @@ watch(() => route.params.sessionId, async (newId) => {
     <!-- Session sidebar -->
     <div class="w-56 border-r border-border bg-muted/30 hidden md:flex flex-col">
       <div class="p-3">
-        <Button size="sm" class="w-full" @click="handleNewChat">
+        <Button size="sm" class="w-full" @click="openNewSessionDialog" data-testid="new-session-btn">
           <Plus class="w-4 h-4 mr-1" /> 新建对话
         </Button>
       </div>
@@ -138,5 +180,11 @@ watch(() => route.params.sessionId, async (newId) => {
         @stop="handleStop"
       />
     </div>
+
+    <SessionConfigDialog
+      v-model:open="configDialogOpen"
+      :initial="configDialogInitial"
+      @confirm="handleConfigConfirm"
+    />
   </div>
 </template>

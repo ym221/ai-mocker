@@ -381,6 +381,83 @@ test.describe('MCP v2 — 轻量写工具', () => {
     await client.close();
   });
 
+  // =========== 真实 LLM：使用 admin 的 gemma provider（id=1, free）===========
+  test('M25 create_module_from_spec 真实生成（调用 gemma 免费模型）', async () => {
+    test.setTimeout(300_000);  // 最多 5 分钟
+
+    // headless-session 默认选 scope=public 里 id 最小的 provider
+    // = seed 的 gemma（免费），与用户要求一致
+
+    // 如果之前测试留下了同名 fixture，先删掉
+    const Database = (await import('better-sqlite3')).default;
+    const { resolve } = await import('path');
+    const { existsSync, rmSync } = await import('fs');
+    const testName = 'mcp_test_feedback';
+    const dbc = new Database(resolve(process.cwd(), 'data', 'mockforge.db'));
+    try {
+      const mod = dbc.prepare('SELECT id FROM modules WHERE name = ? AND user_id = 1').get(testName) as any;
+      if (mod) dbc.prepare('DELETE FROM modules WHERE id = ?').run(mod.id);
+      dbc.exec(`DROP TABLE IF EXISTS mock__1_${testName}`);
+    } finally { dbc.close(); }
+    const dir = resolve(process.cwd(), 'generated/1', testName);
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const r = await client.callTool({
+      name: 'create_module_from_spec',
+      arguments: {
+        moduleName: testName,
+        spec: `请创建一个反馈管理模块，包含字段：content（反馈内容，文本必填）、rating（评分，1-5 整数必填）。端点需要支持列表、详情、创建、更新、删除。`,
+      },
+    }, undefined, { timeout: 300_000 });
+
+    const sc = (r as any).structuredContent as any;
+    if ((r as any).isError) {
+      throw new Error(`create failed: ${(r as any).content?.[0]?.text}; sessionId=${sc?.sessionId}`);
+    }
+    expect(sc.status).toBe('created');
+    expect(sc.moduleName).toBe(testName);
+    expect(sc.endpoints.length).toBeGreaterThan(0);
+    expect(sc.mockBaseUrl).toContain(testName);
+
+    // 调一次生成的端点，确认真能响应
+    const mockRes = await fetch(sc.mockBaseUrl);
+    expect([200, 404]).toContain(mockRes.status);  // list 端点应该可访问
+
+    await client.close();
+  });
+
+  test('M32 update_module 真实修改（延续 M25 创建的模块）', async () => {
+    test.setTimeout(300_000);
+
+    const testName = 'mcp_test_feedback';
+    // M25 应已创建；若未存在则 skip
+    const Database = (await import('better-sqlite3')).default;
+    const { resolve } = await import('path');
+    const dbc = new Database(resolve(process.cwd(), 'data', 'mockforge.db'));
+    const exists = dbc.prepare('SELECT id FROM modules WHERE name = ? AND user_id = 1').get(testName);
+    dbc.close();
+    test.skip(!exists, 'M25 未创建 feedback 模块，跳过');
+
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const r = await client.callTool({
+      name: 'update_module',
+      arguments: {
+        moduleName: testName,
+        instruction: '给 feedback 实体增加一个可选字段 tag（string 类型），不要改其他字段或端点。',
+      },
+    }, undefined, { timeout: 300_000 });
+
+    const sc = (r as any).structuredContent as any;
+    if ((r as any).isError) {
+      throw new Error(`update failed: ${(r as any).content?.[0]?.text}; sessionId=${sc?.sessionId}`);
+    }
+    expect(sc.status).toBe('updated');
+
+    await client.close();
+  });
   test('M24 create_module_from_spec dry_run 返回 plan 预览（不调 LLM）', async () => {
     const key = await generateApiKey();
     const client = await connect(key);

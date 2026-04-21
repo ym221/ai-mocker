@@ -287,6 +287,30 @@ test.describe('MCP v2 — 轻量写工具', () => {
     await client.close();
   });
 
+  test('M26 update_module dry_run 预览（不调 LLM）', async () => {
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const r = await client.callTool({
+      name: 'update_module',
+      arguments: { moduleName: 'user', instruction: '加一个 avatar 字段', dry_run: true },
+    });
+    const sc = (r as any).structuredContent as { status: string; currentEndpoints: string[] };
+    expect(sc.status).toBe('would-update');
+    expect(sc.currentEndpoints.length).toBeGreaterThan(0);
+    await client.close();
+  });
+
+  test('M27 update_module 对不存在模块返回 isError', async () => {
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const r = await client.callTool({
+      name: 'update_module',
+      arguments: { moduleName: 'ghost-module', instruction: 'anything', dry_run: true },
+    });
+    expect((r as any).isError).toBe(true);
+    await client.close();
+  });
+
   test('M24 create_module_from_spec dry_run 返回 plan 预览（不调 LLM）', async () => {
     const key = await generateApiKey();
     const client = await connect(key);

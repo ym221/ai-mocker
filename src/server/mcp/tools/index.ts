@@ -9,6 +9,7 @@ import { registerDeleteModuleTool } from './delete-module.js';
 import { registerRunTestTool } from './run-test.js';
 import { registerManageDataTool } from './manage-data.js';
 import { registerCreateModuleFromSpecTool } from './create-module-from-spec.js';
+import { registerUpdateModuleTool } from './update-module.js';
 
 /** 注册所有 MCP 工具。 */
 export function registerMcpTools(server: McpServer): void {
@@ -25,4 +26,5 @@ export function registerMcpTools(server: McpServer): void {
   registerManageDataTool(server);
   // Write tools (heavy — bridge ChatRunner)
   registerCreateModuleFromSpecTool(server);
+  registerUpdateModuleTool(server);
 }

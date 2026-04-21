@@ -27,6 +27,8 @@ function fieldTypeToOpenApi(t: string): { type: string; format?: string } {
   }
 }
 
+export type { ModuleMeta };
+
 export function readModuleMeta(userId: number, moduleName: string): ModuleMeta | null {
   const metaPath = join(GENERATED_DIR, String(userId), moduleName, '_meta.json');
   if (!existsSync(metaPath)) return null;

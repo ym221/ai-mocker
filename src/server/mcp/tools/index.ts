@@ -1,31 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { z } from 'zod';
-import { getMcpUser } from '../context.js';
+import { registerListModulesTool } from './list-modules.js';
+import { registerGetApiDocTool } from './get-api-doc.js';
+import { registerGetOpenApiTool } from './get-openapi.js';
 
-/**
- * 注册所有 MCP 工具。Task 1.4 会补齐真实工具。
- */
+/** 注册所有 MCP 工具。Step-MCP-2 会追加写工具。 */
 export function registerMcpTools(server: McpServer): void {
-  server.registerTool(
-    'ping',
-    {
-      title: 'Ping',
-      description: 'Health check for the MockForge MCP server. Returns the authenticated user info.',
-      inputSchema: {},
-    },
-    async () => {
-      const user = getMcpUser();
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `pong — authenticated as ${user.username} (id=${user.userId})`,
-          },
-        ],
-      };
-    }
-  );
-
-  // 占位：用于让测试能看到 zod import 不报错
-  void z;
+  registerListModulesTool(server);
+  registerGetApiDocTool(server);
+  registerGetOpenApiTool(server);
 }

@@ -38,19 +38,28 @@ export interface HeadlessOptions {
 }
 
 function pickProviderForUser(userId: number): { id: number; defaultModel: string } | null {
-  // 先找 user-owned active provider
+  // 显式指定（测试 / 用户偏好）
+  const envPreferred = Number(process.env.MCP_DEFAULT_PROVIDER_ID || '0');
+  if (envPreferred > 0) {
+    const p = db.select().from(providers)
+      .where(and(eq(providers.id, envPreferred), eq(providers.isActive, 1)))
+      .get();
+    if (p) return { id: p.id, defaultModel: p.defaultModel };
+  }
+
+  // 先找 public active（通常是免费/平台默认的 seed provider）
+  const pub = db.select().from(providers)
+    .where(and(eq(providers.scope, 'public'), eq(providers.isActive, 1)))
+    .orderBy(providers.id)  // 最早的 public = seed
+    .get();
+  if (pub) return { id: pub.id, defaultModel: pub.defaultModel };
+
+  // 兜底：user-owned private active provider
   const owned = db.select().from(providers)
     .where(and(eq(providers.ownerId, userId), eq(providers.isActive, 1)))
     .orderBy(desc(providers.id))
     .get();
   if (owned) return { id: owned.id, defaultModel: owned.defaultModel };
-
-  // 兜底：public active provider
-  const pub = db.select().from(providers)
-    .where(and(eq(providers.scope, 'public'), eq(providers.isActive, 1)))
-    .orderBy(desc(providers.id))
-    .get();
-  if (pub) return { id: pub.id, defaultModel: pub.defaultModel };
 
   return null;
 }

@@ -8,6 +8,7 @@ import { registerDiffWithOpenApiTool } from './diff-with-openapi.js';
 import { registerDeleteModuleTool } from './delete-module.js';
 import { registerRunTestTool } from './run-test.js';
 import { registerManageDataTool } from './manage-data.js';
+import { registerCreateModuleFromSpecTool } from './create-module-from-spec.js';
 
 /** 注册所有 MCP 工具。 */
 export function registerMcpTools(server: McpServer): void {
@@ -22,4 +23,6 @@ export function registerMcpTools(server: McpServer): void {
   registerDeleteModuleTool(server);
   registerRunTestTool(server);
   registerManageDataTool(server);
+  // Write tools (heavy — bridge ChatRunner)
+  registerCreateModuleFromSpecTool(server);
 }

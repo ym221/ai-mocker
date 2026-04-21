@@ -287,6 +287,42 @@ test.describe('MCP v2 — 轻量写工具', () => {
     await client.close();
   });
 
+  test('M24 create_module_from_spec dry_run 返回 plan 预览（不调 LLM）', async () => {
+    const key = await generateApiKey();
+    const client = await connect(key);
+    const spec = JSON.stringify({
+      openapi: '3.0.3',
+      info: { title: 'feedback' },
+      paths: {
+        '/feedback': {
+          get: { summary: 'list' },
+          post: { summary: 'create' },
+        },
+      },
+      components: {
+        schemas: {
+          feedback: {
+            type: 'object',
+            properties: {
+              content: { type: 'string' },
+              rating: { type: 'integer' },
+            },
+          },
+        },
+      },
+    });
+    const r = await client.callTool({
+      name: 'create_module_from_spec',
+      arguments: { spec, moduleName: 'feedback', dry_run: true },
+    });
+    const sc = (r as any).structuredContent as { status: string; plan: any };
+    expect(sc.status).toBe('would-create');
+    expect(sc.plan.kind).toBe('openapi-derived');
+    expect(sc.plan.entities.map((e: any) => e.name)).toContain('feedback');
+    expect(sc.plan.endpoints.length).toBeGreaterThanOrEqual(2);
+    await client.close();
+  });
+
   test('M23 delete_module 实际删除（造一个临时模块再删）', async () => {
     // 通过直接写 DB 造一个最小模块（无文件，只用 modules 表记录 + delete 验证 DB 清理）
     const Database = (await import('better-sqlite3')).default;

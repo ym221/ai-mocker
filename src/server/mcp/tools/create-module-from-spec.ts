@@ -96,14 +96,17 @@ export function registerCreateModuleFromSpecTool(server: McpServer): void {
     {
       title: 'Create Mock Module from Spec',
       description:
-        'Generate a new Mock module from an API spec. The spec can be an OpenAPI 3 JSON/YAML string or a free-form natural-language description. Set dry_run=true to preview the plan without actually generating. This triggers a full AI generation cycle (up to ~3 minutes); progress is streamed via MCP progress notifications.',
+        'Generate a new Mock module from an API spec. The spec can be an OpenAPI 3 JSON/YAML string or a free-form natural-language description. Set dry_run=true to preview the plan without actually generating. This triggers a full AI generation cycle (up to ~3 minutes); progress is streamed via MCP progress notifications. Optional provider/model/preset overrides pin this run to specific configurations — useful when the IDE caller wants a specific response-format or naming style.',
       inputSchema: {
         spec: z.string().describe('OpenAPI JSON/YAML or natural-language description of the module'),
         moduleName: z.string().optional().describe('Desired module name (lowercase, ASCII). If omitted, AI infers it.'),
+        provider: z.number().int().optional().describe('Provider id to use for this run (must be user-owned or public). Overrides auto-pick.'),
+        model: z.string().optional().describe('Model id to use (e.g. "claude-sonnet-4-6"). Overrides provider default.'),
+        preset: z.union([z.number().int(), z.string()]).optional().describe('Preset id (number) or preset name (string). Pins response format / field naming / pagination rules.'),
         dry_run: z.boolean().optional().describe('If true, return only the plan preview without executing'),
       },
     },
-    async ({ spec, moduleName, dry_run }, extra) => {
+    async ({ spec, moduleName, provider, model, preset, dry_run }, extra) => {
       const user = getMcpUser();
 
       // ---- dry_run: 纯静态预览，不起 ChatRunner ----
@@ -139,6 +142,10 @@ export function registerCreateModuleFromSpecTool(server: McpServer): void {
         userContent,
         title: `[MCP] create ${moduleName || 'module'}`,
         moduleName,
+        providerId: provider,
+        model,
+        presetId: typeof preset === 'number' ? preset : undefined,
+        presetName: typeof preset === 'string' ? preset : undefined,
         onProgress: async (p: HeadlessProgress) => {
           if (!sendProgress || !progressToken) return;
           try {

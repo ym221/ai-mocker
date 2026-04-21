@@ -60,14 +60,17 @@ export function registerUpdateModuleTool(server: McpServer): void {
     {
       title: 'Update Existing Mock Module',
       description:
-        'Modify an existing Mock module. Pass a natural-language instruction describing the desired change (add a field, add an endpoint, tweak response shape, fix a bug). Set dry_run=true to preview which entities/fields/endpoints would change, without touching files. Triggers a full AI generation cycle; progress streamed via MCP progress notifications.',
+        'Modify an existing Mock module. Pass a natural-language instruction describing the desired change (add a field, add an endpoint, tweak response shape, fix a bug). Set dry_run=true to preview which entities/fields/endpoints would change, without touching files. Triggers a full AI generation cycle; progress streamed via MCP progress notifications. Optional provider/model/preset overrides pin this run to specific configurations.',
       inputSchema: {
         moduleName: z.string(),
         instruction: z.string().describe('Natural-language description of the change'),
+        provider: z.number().int().optional().describe('Provider id to use for this run (must be user-owned or public). Overrides auto-pick.'),
+        model: z.string().optional().describe('Model id to use (e.g. "claude-sonnet-4-6"). Overrides provider default.'),
+        preset: z.union([z.number().int(), z.string()]).optional().describe('Preset id (number) or preset name (string). Pins response format / field naming / pagination rules.'),
         dry_run: z.boolean().optional(),
       },
     },
-    async ({ moduleName, instruction, dry_run }, extra) => {
+    async ({ moduleName, instruction, provider, model, preset, dry_run }, extra) => {
       const user = getMcpUser();
 
       // 校验模块存在
@@ -112,6 +115,10 @@ export function registerUpdateModuleTool(server: McpServer): void {
         userContent,
         title: `[MCP] update ${moduleName}`,
         moduleName,
+        providerId: provider,
+        model,
+        presetId: typeof preset === 'number' ? preset : undefined,
+        presetName: typeof preset === 'string' ? preset : undefined,
         onProgress: async (p: HeadlessProgress) => {
           if (!sendProgress || !progressToken) return;
           try {

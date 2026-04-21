@@ -10,9 +10,9 @@
  */
 
 import { randomUUID } from 'crypto';
-import { and, eq, desc } from 'drizzle-orm';
+import { and, eq, desc, or } from 'drizzle-orm';
 import { db } from '../../core/database.js';
-import { sessions, providers } from '../../core/schema.js';
+import { sessions, providers, presets } from '../../core/schema.js';
 import { ChatRunner, type StreamEvent } from '../../agent/chat-runner.js';
 
 export interface HeadlessProgress {
@@ -33,6 +33,14 @@ export interface HeadlessOptions {
   userContent: string;
   title: string;
   moduleName?: string;
+  /** Override the provider used for this run. Must belong to the user or be public. */
+  providerId?: number;
+  /** Override the model used for this run (else falls back to provider.defaultModel). */
+  model?: string;
+  /** Override the preset by id. Must belong to the user or be public. */
+  presetId?: number;
+  /** Override the preset by name (user-owned lookup). Ignored if presetId is set. */
+  presetName?: string;
   onProgress?: (progress: HeadlessProgress) => void | Promise<void>;
   signal?: AbortSignal;
 }
@@ -91,17 +99,75 @@ function toProgress(ev: StreamEvent): HeadlessProgress | null {
   }
 }
 
+/** Resolve provider override: must be user-owned or public; returns null if not found / not allowed. */
+function resolveProviderOverride(userId: number, providerId: number): { id: number; defaultModel: string } | null {
+  const p = db.select().from(providers)
+    .where(and(
+      eq(providers.id, providerId),
+      eq(providers.isActive, 1),
+      or(eq(providers.scope, 'public'), eq(providers.ownerId, userId)),
+    ))
+    .get();
+  return p ? { id: p.id, defaultModel: p.defaultModel } : null;
+}
+
+/** Resolve preset by id (scope-aware) or by name (user-owned). Returns id or null. */
+function resolvePreset(userId: number, presetId?: number, presetName?: string): number | null {
+  if (presetId) {
+    const p = db.select().from(presets)
+      .where(and(
+        eq(presets.id, presetId),
+        eq(presets.isActive, 1),
+        or(eq(presets.scope, 'public'), eq(presets.ownerId, userId)),
+      ))
+      .get();
+    return p ? p.id : null;
+  }
+  if (presetName) {
+    const p = db.select().from(presets)
+      .where(and(
+        eq(presets.name, presetName),
+        eq(presets.isActive, 1),
+        or(eq(presets.scope, 'public'), eq(presets.ownerId, userId)),
+      ))
+      .get();
+    return p ? p.id : null;
+  }
+  return null;
+}
+
 /**
  * Run a fresh ChatRunner session end-to-end, returning once it reaches a
  * terminal state (done/error/paused/aborted).
  */
 export async function runHeadlessSession(opts: HeadlessOptions): Promise<HeadlessResult> {
-  const provider = pickProviderForUser(opts.userId);
-  if (!provider) {
-    throw new Error(
-      'No active AI provider configured for this user. Please add one in Settings → Providers.',
-    );
+  // Provider: explicit override > auto-pick
+  let provider: { id: number; defaultModel: string } | null = null;
+  if (opts.providerId) {
+    provider = resolveProviderOverride(opts.userId, opts.providerId);
+    if (!provider) {
+      throw new Error(`Provider id=${opts.providerId} not found, inactive, or not owned by this user.`);
+    }
+  } else {
+    provider = pickProviderForUser(opts.userId);
+    if (!provider) {
+      throw new Error(
+        'No active AI provider configured for this user. Please add one in Settings → Providers.',
+      );
+    }
   }
+
+  // Preset override
+  const resolvedPresetId = resolvePreset(opts.userId, opts.presetId, opts.presetName);
+  if (opts.presetId && resolvedPresetId == null) {
+    throw new Error(`Preset id=${opts.presetId} not found, inactive, or not owned by this user.`);
+  }
+  if (opts.presetName && resolvedPresetId == null) {
+    throw new Error(`Preset name="${opts.presetName}" not found, inactive, or not owned by this user.`);
+  }
+
+  // Model override: opts.model > provider.defaultModel
+  const model = opts.model || provider.defaultModel;
 
   // 1. Create sessions row
   const sessionId = randomUUID();
@@ -110,7 +176,8 @@ export async function runHeadlessSession(opts: HeadlessOptions): Promise<Headles
     title: opts.title,
     userId: opts.userId,
     providerId: provider.id,
-    model: provider.defaultModel,
+    model,
+    presetId: resolvedPresetId,
     moduleName: opts.moduleName ?? null,
   }).run();
 

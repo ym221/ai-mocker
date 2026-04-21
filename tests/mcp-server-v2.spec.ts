@@ -494,6 +494,115 @@ test.describe('MCP v2 — 轻量写工具', () => {
     await client.close();
   });
 
+  // =========== Step-MCP-3.3：provider / model / preset overrides ===========
+
+  test('M33 create_module_from_spec preset=<id> 写入 session.presetId', async () => {
+    const { runHeadlessSession } = await import('../src/server/mcp/lib/headless-session.js');
+    const Database = (await import('better-sqlite3')).default;
+    const { resolve } = await import('path');
+    const DB = resolve(process.cwd(), 'data', 'mockforge.db');
+
+    // 造一个属于 user=1 的 preset
+    const db = new Database(DB);
+    let presetId = 0;
+    try {
+      db.prepare(`DELETE FROM presets WHERE name = ? AND owner_id = 1`).run('m33-preset');
+      const row = db.prepare(
+        `INSERT INTO presets (name, description, content, scope, owner_id, is_active)
+         VALUES (?, ?, ?, 'private', 1, 1) RETURNING id`
+      ).get('m33-preset', 'test', JSON.stringify({ fieldNaming: 'snake_case' })) as { id: number };
+      presetId = row.id;
+    } finally { db.close(); }
+
+    const result = await runHeadlessSession({
+      userId: 1,
+      userContent: '__fake__',
+      title: '[MCP-TEST] M33 override preset by id',
+      presetId,
+    });
+    expect(result.status).toBe('done');
+
+    const db2 = new Database(DB);
+    try {
+      const sess = db2.prepare(`SELECT preset_id FROM sessions WHERE id = ?`).get(result.sessionId) as { preset_id: number | null };
+      expect(sess.preset_id).toBe(presetId);
+    } finally { db2.close(); }
+  });
+
+  test('M34 create_module_from_spec preset=<name> 按名字查到并绑定', async () => {
+    const { runHeadlessSession } = await import('../src/server/mcp/lib/headless-session.js');
+    const Database = (await import('better-sqlite3')).default;
+    const { resolve } = await import('path');
+    const DB = resolve(process.cwd(), 'data', 'mockforge.db');
+
+    const db = new Database(DB);
+    let presetId = 0;
+    try {
+      db.prepare(`DELETE FROM presets WHERE name = ? AND owner_id = 1`).run('m34-preset-byname');
+      const row = db.prepare(
+        `INSERT INTO presets (name, description, content, scope, owner_id, is_active)
+         VALUES (?, ?, ?, 'private', 1, 1) RETURNING id`
+      ).get('m34-preset-byname', 'test', JSON.stringify({ fieldNaming: 'camelCase' })) as { id: number };
+      presetId = row.id;
+    } finally { db.close(); }
+
+    const result = await runHeadlessSession({
+      userId: 1,
+      userContent: '__fake__',
+      title: '[MCP-TEST] M34 override preset by name',
+      presetName: 'm34-preset-byname',
+    });
+    expect(result.status).toBe('done');
+
+    const db2 = new Database(DB);
+    try {
+      const sess = db2.prepare(`SELECT preset_id FROM sessions WHERE id = ?`).get(result.sessionId) as { preset_id: number | null };
+      expect(sess.preset_id).toBe(presetId);
+    } finally { db2.close(); }
+  });
+
+  test('M35 create_module_from_spec model=<str> 覆盖 session.model', async () => {
+    const { runHeadlessSession } = await import('../src/server/mcp/lib/headless-session.js');
+    const Database = (await import('better-sqlite3')).default;
+    const { resolve } = await import('path');
+    const DB = resolve(process.cwd(), 'data', 'mockforge.db');
+
+    const customModel = 'my-custom-model-id-for-test';
+    const result = await runHeadlessSession({
+      userId: 1,
+      userContent: '__fake__',
+      title: '[MCP-TEST] M35 override model',
+      model: customModel,
+    });
+    expect(result.status).toBe('done');
+
+    const db = new Database(DB);
+    try {
+      const sess = db.prepare(`SELECT model FROM sessions WHERE id = ?`).get(result.sessionId) as { model: string | null };
+      expect(sess.model).toBe(customModel);
+    } finally { db.close(); }
+  });
+
+  test('M36 unknown presetName 抛友好错误', async () => {
+    const { runHeadlessSession } = await import('../src/server/mcp/lib/headless-session.js');
+    await expect(runHeadlessSession({
+      userId: 1,
+      userContent: '__fake__',
+      title: '[MCP-TEST] M36',
+      presetName: '__absolutely-does-not-exist-preset__',
+    })).rejects.toThrow(/not found/);
+  });
+
+  test('M37 unknown providerId 抛友好错误', async () => {
+    const { runHeadlessSession } = await import('../src/server/mcp/lib/headless-session.js');
+    await expect(runHeadlessSession({
+      userId: 1,
+      userContent: '__fake__',
+      title: '[MCP-TEST] M37',
+      providerId: 999999,
+    })).rejects.toThrow(/not found|not owned/);
+  });
+
   test('M23 delete_module 实际删除（造一个临时模块再删）', async () => {
     // 通过直接写 DB 造一个最小模块（无文件，只用 modules 表记录 + delete 验证 DB 清理）
     const Database = (await import('better-sqlite3')).default;

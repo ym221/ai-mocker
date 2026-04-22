@@ -502,16 +502,21 @@ test.describe('MCP v2 — 轻量写工具', () => {
     const { resolve } = await import('path');
     const DB = resolve(process.cwd(), 'data', 'mockforge.db');
 
-    // 造一个属于 user=1 的 preset
+    // 造一个属于 user=1 的 preset(幂等:如果已被前次运行的 session 引用,直接复用其 id)
     const db = new Database(DB);
     let presetId = 0;
     try {
-      db.prepare(`DELETE FROM presets WHERE name = ? AND owner_id = 1`).run('m33-preset');
-      const row = db.prepare(
-        `INSERT INTO presets (name, description, content, scope, owner_id, is_active)
-         VALUES (?, ?, ?, 'private', 1, 1) RETURNING id`
-      ).get('m33-preset', 'test', JSON.stringify({ fieldNaming: 'snake_case' })) as { id: number };
-      presetId = row.id;
+      const existing = db.prepare(`SELECT id FROM presets WHERE name = ? AND owner_id = 1`).get('m33-preset') as { id: number } | undefined;
+      if (existing) {
+        db.prepare(`UPDATE presets SET is_active = 1, content = ? WHERE id = ?`).run(JSON.stringify({ fieldNaming: 'snake_case' }), existing.id);
+        presetId = existing.id;
+      } else {
+        const row = db.prepare(
+          `INSERT INTO presets (name, description, content, scope, owner_id, is_active)
+           VALUES (?, ?, ?, 'private', 1, 1) RETURNING id`
+        ).get('m33-preset', 'test', JSON.stringify({ fieldNaming: 'snake_case' })) as { id: number };
+        presetId = row.id;
+      }
     } finally { db.close(); }
 
     const result = await runHeadlessSession({
@@ -538,12 +543,17 @@ test.describe('MCP v2 — 轻量写工具', () => {
     const db = new Database(DB);
     let presetId = 0;
     try {
-      db.prepare(`DELETE FROM presets WHERE name = ? AND owner_id = 1`).run('m34-preset-byname');
-      const row = db.prepare(
-        `INSERT INTO presets (name, description, content, scope, owner_id, is_active)
-         VALUES (?, ?, ?, 'private', 1, 1) RETURNING id`
-      ).get('m34-preset-byname', 'test', JSON.stringify({ fieldNaming: 'camelCase' })) as { id: number };
-      presetId = row.id;
+      const existing = db.prepare(`SELECT id FROM presets WHERE name = ? AND owner_id = 1`).get('m34-preset-byname') as { id: number } | undefined;
+      if (existing) {
+        db.prepare(`UPDATE presets SET is_active = 1, content = ? WHERE id = ?`).run(JSON.stringify({ fieldNaming: 'camelCase' }), existing.id);
+        presetId = existing.id;
+      } else {
+        const row = db.prepare(
+          `INSERT INTO presets (name, description, content, scope, owner_id, is_active)
+           VALUES (?, ?, ?, 'private', 1, 1) RETURNING id`
+        ).get('m34-preset-byname', 'test', JSON.stringify({ fieldNaming: 'camelCase' })) as { id: number };
+        presetId = row.id;
+      }
     } finally { db.close(); }
 
     const result = await runHeadlessSession({

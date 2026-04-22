@@ -322,7 +322,13 @@ test('删除', async (ctx) => {
 4. endpoints 的 path 不要加模块名前缀
 5. 生成完 6 个文件后，**必须调用 run_test 验证**，test.ts 必须覆盖 create → list → get → update → delete 全流程
 6. **run_test 失败必须修复后重新 run_test**，最多重试 3 次；未通过 run_test 之前不得声明任务完成
-7. **表名一致性**：_meta.json 里 entities[0].tableName 必须与 schema.sql 的 CREATE TABLE 表名完全一致（包括单复数）
+7. **表名一致性（最常见错误,严重警告）**：
+   - \`entity.name\` 和 \`entity.tableName\` **必须配对**：tableName 固定为 \`mock__{entity.name}\`，不允许二者不一致
+     - ✓ \`{ name: "warehouse_item", tableName: "mock__warehouse_item" }\`
+     - ✗ \`{ name: "warehouse_item", tableName: "mock__warehouse" }\` — 这会导致 /data 页面自愈失败、manage_data 抛 "表不存在"
+   - \`schema.sql\` 的 CREATE TABLE 表名必须 = \`entity.tableName\`（原样，不含 userId 前缀；系统会在 exec 时自动注入 \`mock__{userId}_\`）
+   - 一个模块可以有多个 entity，但每个 entity 的 tableName 必须唯一且与 schema.sql 中对应的 CREATE TABLE 一一对应
+   - 禁止：在 _meta.json 里为同一个物理表声明多个 entity（如为"部分更新"再造一个假 entity）— OpenAPI 导出器已自动生成 \`{EntityName}Patch\` schema 供 PUT/PATCH 使用，不需要你手动加 patch entity
 8. **write_file 返回含 "SQL execution failed" 时必须立即修复 schema.sql 重写**，不可忽略该失败继续下一步
 9. **字段名全程透传**：
    - 用户明确提供接口文档或指定字段名时，**必须原样使用文档中的字段名**，不得自行转换大小写或风格

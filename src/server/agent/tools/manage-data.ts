@@ -88,8 +88,16 @@ function getModuleMeta(userId: number, moduleName: string) {
 
 function resolveTableName(userId: number, moduleName: string, entityName?: string): { tableName: string; meta: Record<string, unknown>; entityName: string } {
   const meta = getModuleMeta(userId, moduleName);
-  const resolved = entityName || (meta.entities?.[0]?.name as string) || moduleName;
-  return { tableName: `mock__${resolved}`, meta, entityName: resolved };
+  const entities = (meta.entities as Array<{ name: string; tableName?: string }> | undefined) ?? [];
+  const entity = entityName ? entities.find(e => e.name === entityName) : entities[0];
+  if (!entity) {
+    throw new Error(`Entity ${entityName ? `"${entityName}"` : '[0]'} not found in ${moduleName}/_meta.json`);
+  }
+  // Prefer the explicit tableName field declared in _meta.json — it's the
+  // ground truth that write-file.ts / schema.sql actually created. Fall back
+  // to the `mock__{name}` convention only when tableName is absent.
+  const tableName = entity.tableName || `mock__${entity.name}`;
+  return { tableName, meta, entityName: entity.name };
 }
 
 /**

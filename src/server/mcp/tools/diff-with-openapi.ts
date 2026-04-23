@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../../core/database.js';
 import { modules } from '../../core/schema.js';
-import { buildOpenApi } from '../../core/openapi-export.js';
+import { buildOpenApi, readModuleMeta } from '../../core/openapi-export.js';
+import { matchCondition } from '../../core/validator.js';
 import { getMcpUserId } from '../context.js';
 
 type DiffKind =
@@ -11,7 +12,9 @@ type DiffKind =
   | 'status-mismatch'
   | 'missing-in-actual'
   | 'missing-in-spec'
-  | 'type-mismatch';
+  | 'type-mismatch'
+  | 'constraint-violation'
+  | 'cross-field-violation';
 
 interface Diff {
   path: string;
@@ -53,6 +56,76 @@ function resolveSchema(spec: any, schema: any): any {
   if (!schema) return null;
   if (schema.$ref) return resolveRef(spec, schema.$ref);
   return schema;
+}
+
+/**
+ * Check leaf-value constraints against the resolved schema (enum, min/max,
+ * minLength/maxLength, pattern). Each violation produces a constraint-
+ * violation diff. Walked at object property leaves and at root primitives.
+ */
+function checkLeafConstraints(schema: any, actual: unknown, path: string, diffs: Diff[]): void {
+  if (actual === null || actual === undefined) return;
+
+  // enum
+  if (Array.isArray(schema.enum) && schema.enum.length > 0) {
+    if (!schema.enum.includes(actual)) {
+      diffs.push({
+        path: path || '(root)',
+        kind: 'constraint-violation',
+        spec: { enum: schema.enum },
+        actual,
+        message: `value not in enum [${schema.enum.join(', ')}]`,
+      });
+    }
+  }
+
+  // numeric range
+  if (typeof actual === 'number') {
+    if (typeof schema.minimum === 'number' && actual < schema.minimum) {
+      diffs.push({
+        path: path || '(root)', kind: 'constraint-violation',
+        spec: { minimum: schema.minimum }, actual,
+        message: `value < minimum ${schema.minimum}`,
+      });
+    }
+    if (typeof schema.maximum === 'number' && actual > schema.maximum) {
+      diffs.push({
+        path: path || '(root)', kind: 'constraint-violation',
+        spec: { maximum: schema.maximum }, actual,
+        message: `value > maximum ${schema.maximum}`,
+      });
+    }
+  }
+
+  // string length + pattern
+  if (typeof actual === 'string') {
+    if (typeof schema.minLength === 'number' && actual.length < schema.minLength) {
+      diffs.push({
+        path: path || '(root)', kind: 'constraint-violation',
+        spec: { minLength: schema.minLength }, actual: `len=${actual.length}`,
+        message: `string shorter than minLength ${schema.minLength}`,
+      });
+    }
+    if (typeof schema.maxLength === 'number' && actual.length > schema.maxLength) {
+      diffs.push({
+        path: path || '(root)', kind: 'constraint-violation',
+        spec: { maxLength: schema.maxLength }, actual: `len=${actual.length}`,
+        message: `string longer than maxLength ${schema.maxLength}`,
+      });
+    }
+    if (typeof schema.pattern === 'string') {
+      try {
+        const re = new RegExp(schema.pattern);
+        if (!re.test(actual)) {
+          diffs.push({
+            path: path || '(root)', kind: 'constraint-violation',
+            spec: { pattern: schema.pattern }, actual,
+            message: `string does not match pattern`,
+          });
+        }
+      } catch { /* invalid regex in spec — skip */ }
+    }
+  }
 }
 
 /** 递归对比实际值 vs spec schema。返回 diffs 数组。 */
@@ -110,8 +183,46 @@ function diffValueAgainstSchema(spec: any, schema: any, actual: unknown, pathPre
     if (actual.length > 0 && resolved.items) {
       diffValueAgainstSchema(spec, resolved.items, actual[0], pathPrefix ? `${pathPrefix}[0]` : '[0]', diffs);
     }
+  } else {
+    // Leaf value: check constraint annotations on the resolved schema
+    checkLeafConstraints(resolved, actual, pathPrefix, diffs);
   }
-  // 基础类型已通过类型检查；不深入
+}
+
+/**
+ * Cross-field check: read entity.constraints from _meta.json (OpenAPI cannot
+ * natively express "if X then Y" rules, so we go straight to the source of
+ * truth). For each constraint whose `when` matches, every `must` field is
+ * checked against the actual record; failures produce cross-field-violation
+ * diffs.
+ */
+function checkCrossFieldConstraints(
+  userId: number,
+  moduleName: string,
+  actual: Record<string, unknown>,
+  pathPrefix: string,
+  diffs: Diff[],
+): void {
+  const meta = readModuleMeta(userId, moduleName);
+  const entity = meta?.entities?.[0];
+  const constraints = entity?.constraints || [];
+  if (constraints.length === 0) return;
+
+  for (const c of constraints) {
+    const whenHit = Object.entries(c.when).every(([f, cond]) => matchCondition(actual[f], cond));
+    if (!whenHit) continue;
+    for (const [field, cond] of Object.entries(c.must)) {
+      if (!matchCondition(actual[field], cond)) {
+        diffs.push({
+          path: pathPrefix ? `${pathPrefix}.${field}` : field,
+          kind: 'cross-field-violation',
+          spec: { when: c.when, must: { [field]: cond } },
+          actual: actual[field],
+          message: c.message,
+        });
+      }
+    }
+  }
 }
 
 function stripTrailingSlash(p: string): string {
@@ -208,6 +319,16 @@ export function registerDiffWithOpenApiTool(server: McpServer): void {
             const reqSchema = op.requestBody?.content?.['application/json']?.schema;
             if (reqSchema) {
               diffValueAgainstSchema(spec, reqSchema, actualRequest.body, 'request.body', diffs);
+            }
+            // Cross-field constraints (read from _meta.json directly; OpenAPI
+            // cannot natively express them). Only meaningful for write methods.
+            const m = actualRequest.method.toUpperCase();
+            if ((m === 'POST' || m === 'PUT' || m === 'PATCH') && typeof actualRequest.body === 'object' && actualRequest.body !== null) {
+              checkCrossFieldConstraints(
+                userId, moduleName,
+                actualRequest.body as Record<string, unknown>,
+                'request.body', diffs,
+              );
             }
           }
 

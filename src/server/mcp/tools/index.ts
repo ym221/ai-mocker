@@ -10,6 +10,8 @@ import { registerRunTestTool } from './run-test.js';
 import { registerManageDataTool } from './manage-data.js';
 import { registerCreateModuleFromSpecTool } from './create-module-from-spec.js';
 import { registerUpdateModuleTool } from './update-module.js';
+import { registerGetSessionStatusTool } from './get-session-status.js';
+import { registerCancelSessionTool } from './cancel-session.js';
 import { registerGenerateHandoffReportTool } from './generate-handoff-report.js';
 
 /** 注册所有 MCP 工具。 */
@@ -28,6 +30,9 @@ export function registerMcpTools(server: McpServer): void {
   // Write tools (heavy — bridge ChatRunner)
   registerCreateModuleFromSpecTool(server);
   registerUpdateModuleTool(server);
+  // Session tools (MCP-5: resumability helpers)
+  registerGetSessionStatusTool(server);
+  registerCancelSessionTool(server);
   // Reporting
   registerGenerateHandoffReportTool(server);
 }

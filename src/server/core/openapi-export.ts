@@ -15,6 +15,48 @@ function fieldTypeToOpenApi(t: string): { type: string; format?: string } {
   }
 }
 
+/**
+ * Map a single MetaField to an OpenAPI schema fragment.
+ * Includes type/format + every applicable constraint (enum, min/max, pattern,
+ * minLength/maxLength, default, description). The result is shared between
+ * full entity schemas and Patch schemas — adding a constraint here propagates
+ * to both POST validation and PUT validation views.
+ */
+function fieldToOpenApiSchema(f: MetaField): Record<string, unknown> {
+  const oapi: Record<string, unknown> = {
+    ...fieldTypeToOpenApi(String(f.type || 'string')),
+  };
+  if (f.description) oapi.description = f.description;
+  else if (f.displayName) oapi.description = f.displayName;
+  if (Array.isArray(f.enum) && f.enum.length > 0) oapi.enum = [...f.enum];
+  if (typeof f.min === 'number') oapi.minimum = f.min;
+  if (typeof f.max === 'number') oapi.maximum = f.max;
+  if (typeof f.minLength === 'number') oapi.minLength = f.minLength;
+  if (typeof f.maxLength === 'number') oapi.maxLength = f.maxLength;
+  if (typeof f.pattern === 'string') oapi.pattern = f.pattern;
+  if (f.default !== undefined) oapi.default = f.default;
+  return oapi;
+}
+
+/**
+ * Render entity-level cross-field constraints into a markdown block for the
+ * endpoint description. Schema-level OpenAPI cannot natively express "if X
+ * then Y" rules, so we surface them in description for human readers, and
+ * diff_with_openapi reads constraints directly from _meta.json (Task 4.4).
+ */
+function constraintsToMarkdown(constraints: EntityConstraint[]): string {
+  if (!constraints.length) return '';
+  const lines = ['', '## 业务约束 (Cross-field rules)'];
+  for (const c of constraints) {
+    const id = c.id ? ` [${c.id}]` : '';
+    const whenStr = JSON.stringify(c.when);
+    const mustStr = JSON.stringify(c.must);
+    lines.push(`- when ${whenStr} → must ${mustStr}${id}`);
+    if (c.message) lines.push(`  - ${c.message}`);
+  }
+  return lines.join('\n');
+}
+
 export type { ModuleMeta };
 
 export function readModuleMeta(userId: number, moduleName: string): ModuleMeta | null {
@@ -41,6 +83,7 @@ export function buildOpenApi(userId: number, moduleName: string): Record<string,
   };
 
   const firstEntityName = meta.entities?.[0]?.name;
+  const firstEntity = meta.entities?.[0];
   for (const ent of meta.entities || []) {
     // ===== Full schema: includes id + all fields + created_at / updated_at =====
     // Used for response bodies and POST (create) request bodies.
@@ -53,12 +96,9 @@ export function buildOpenApi(userId: number, moduleName: string): Record<string,
     // (partial merge — only pass the fields you want to change).
     const patchProperties: Record<string, any> = {};
     for (const f of ent.fields || []) {
-      const oapiType = {
-        ...fieldTypeToOpenApi(String(f.type || 'string')),
-        ...(f.displayName ? { description: f.displayName } : {}),
-      };
-      properties[f.name] = oapiType;
-      patchProperties[f.name] = oapiType;
+      const oapiSchema = fieldToOpenApiSchema(f);
+      properties[f.name] = oapiSchema;
+      patchProperties[f.name] = oapiSchema;
       if (f.required) required.push(f.name);
     }
     properties.created_at = { type: 'string', format: 'date-time', description: 'Created at' };
@@ -89,13 +129,23 @@ export function buildOpenApi(userId: number, moduleName: string): Record<string,
     },
   });
 
+  // Cross-field constraints surface as markdown appended to write-endpoint
+  // descriptions (POST/PUT/PATCH). diff_with_openapi reads the same constraints
+  // from _meta.json directly, so this description block is purely for human /
+  // OpenAPI consumers.
+  const constraintsMd = constraintsToMarkdown(firstEntity?.constraints || []);
+
   for (const ep of meta.endpoints || []) {
     const fullPath = (basePath + (ep.path || '')).replace(/\/:([A-Za-z0-9_]+)/g, '/{$1}');
     const method = String(ep.method || 'GET').toLowerCase();
+    const isWrite = method === 'post' || method === 'put' || method === 'patch';
     const op: Record<string, any> = {
       summary: ep.name || ep.type,
       tags: [meta.name || moduleName],
     };
+    if (isWrite && constraintsMd) {
+      op.description = constraintsMd.trimStart();
+    }
 
     const paramNames: string[] = [];
     const re = /\{([A-Za-z0-9_]+)\}/g;

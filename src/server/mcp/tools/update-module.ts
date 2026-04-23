@@ -129,8 +129,10 @@ export function registerUpdateModuleTool(server: McpServer): void {
       const richDiff = diffSnapshots(before, after);
       const apiDoc = readModuleApiDocHead(user.userId, moduleName);
 
-      // retry counter (existing soft warnings)
-      const retryWarnings = bumpRetryCounter(`${user.userId}:${moduleName}:update`);
+      // retry counter (existing soft warnings) — bumpRetryCounter returns
+      // Warning[] only when the threshold is hit, otherwise undefined; null-coalesce
+      // before spreading to avoid "X is not iterable" runtime crash.
+      const retryWarnings = bumpRetryCounter(`${user.userId}:${moduleName}:update`) ?? [];
       const allWarnings = [...richDiff.warnings, ...retryWarnings];
 
       const summaryText = richDiff.lines.length

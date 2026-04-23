@@ -353,13 +353,105 @@ AI 可先预览，和用户确认后再不带 `dry_run` 正式跑。
 
 ---
 
-## 13. 路线图
+## 13. 业务约束建模(Step-MCP-4)
+
+### 13.1 _meta.json 字段级约束
+
+每个字段都可以加约束;运行时 (BaseModel) + 契约 (OpenAPI) + 对账 (diff_with_openapi) 三处自动同步。
+
+```jsonc
+"fields": [
+  {
+    "name": "sku", "type": "string", "displayName": "SKU",
+    "required": true, "unique": true,
+    "pattern": "^[A-Z0-9-]{3,32}$"
+  },
+  {
+    "name": "qty", "type": "integer", "displayName": "数量",
+    "required": true, "min": 0, "max": 100000
+  },
+  {
+    "name": "status", "type": "string", "displayName": "状态",
+    "enum": ["in_stock", "low_stock", "out_of_stock"],
+    "default": "in_stock"
+  }
+]
+```
+
+| 约束 | 字段 | 例 |
+|------|------|----|
+| 必填 | `required: true` | sku |
+| 枚举 | `enum: [...]` | status |
+| 数值范围 | `min` / `max` | qty 0-100000 |
+| 字符串长度 | `minLength` / `maxLength` | code 3-32 |
+| 字符串格式 | `pattern` (正则) | sku ^[A-Z0-9-]{3,32}$ |
+| 唯一性 | `unique: true` | sku |
+| 默认值 | `default` | status='in_stock' |
+
+旧字段 `enumValues` / `defaultValue` 仍然兼容(新代码统一读 `enum` / `default`)。
+
+### 13.2 entity.constraints 跨字段规则
+
+```jsonc
+"constraints": [
+  {
+    "id": "qty-zero-status",
+    "when": { "qty": 0 },
+    "must": { "status": "out_of_stock" },
+    "message": "数量为 0 时,状态必须为 out_of_stock"
+  },
+  {
+    "id": "low-stock",
+    "when": { "qty": { "gt": 0, "lte": 10 } },
+    "must": { "status": "low_stock" },
+    "message": "数量 ≤10 (>0) 时必须 low_stock"
+  }
+]
+```
+
+`when` / `must` 中每个条件可以是字面值(等于),或 `{ eq, neq, gt, gte, lt, lte, in }` 范围对象。
+
+### 13.3 三处自动同步
+
+**1. 运行时**(`BaseModel.withMeta()`): controller 用 `new BaseModel('mock__x').withMeta('moduleName')`,POST/PUT 时自动校验,违反抛 `ValidationError`,模板 try/catch 转 `{ success:false, message, statusCode: 400 }`。
+
+**2. OpenAPI** (`get_openapi`):
+- field.enum → `schema.enum`
+- field.min/max → `schema.minimum/maximum`
+- field.pattern → `schema.pattern`
+- entity.constraints → POST/PUT/PATCH endpoint description 末尾 markdown 块
+
+**3. 对账** (`diff_with_openapi`): 喂入实际请求,新增 diff kinds:
+- `constraint-violation`: enum/min/max/pattern 单字段违反
+- `cross-field-violation`: 跨字段 when/must 不满足
+
+### 13.4 update_module 富 diff
+
+旧版只识别 entity/field/endpoint 增删;现在的 diff 还包含:
+- `+constraint <id>` / `-constraint <id>`
+- `+test "<name>"` / `-test "<name>"`
+- warnings: `controller.ts changed (bytes ±N, error-branches ±M)` / `api-doc.md ±N lines`
+- 显式 `hasChange=false` + 提示文字: AI 没真改任何东西时立即可见
+
+### 13.5 优先级
+
+AI 在生成时遵循的硬规则:
+1. **优先**把字段约束写进 `_meta.json` field
+2. **跨字段规则** 写进 `entity.constraints`
+3. **复杂业务流转** (状态机、关联) 才在 controller.ts 手写
+
+不允许在 controller.ts 重复写 if-throw 校验代码 — 那会导致 OpenAPI 看不到约束、对账工具检测不到违反。
+
+---
+
+## 14. 路线图
 
 | 版本 | 状态 | 能力 |
 |------|------|------|
 | Step-MCP-1 | ✅ | 只读工具 + API Key + guide |
 | Step-MCP-2 | ✅ | 写工具 + 业务侧感知 + 交接报告 + progress notifications + 软 warnings + dry_run |
-| Step-MCP-3 | ✅（当前） | mock-router 放权 + 规范决策硬规则 + provider/model/preset 覆盖 + Web UI 选择器 |
-| 未来 | — | 细粒度 Key 权限（read-only / write）、stdio transport、sampling 优化生成 |
+| Step-MCP-3 | ✅ | mock-router 放权 + 规范决策硬规则 + provider/model/preset 覆盖 + Web UI 选择器 |
+| Step-MCP-4 | ✅(当前) | _meta.json 约束建模 + OpenAPI 映射 + BaseModel auto-validate + diff 富化 |
+| 未来 | — | 细粒度 Key 权限(read-only / write)、stdio transport、sampling 优化生成 |
 
-更详细的设计和决策记录见 [`ANALYSIS-AI-DEV-WORKFLOW.md`](../ANALYSIS-AI-DEV-WORKFLOW.md) 和 `CURSOR.md` 的 Step-MCP-{1,2,3} 章节。
+更详细的设计和决策记录见 [`ANALYSIS-AI-DEV-WORKFLOW.md`](../ANALYSIS-AI-DEV-WORKFLOW.md) 和 `CURSOR.md` 的 Step-MCP-{1,2,3,4} 章节。

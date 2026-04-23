@@ -2,7 +2,7 @@
 
 ## 当前位置
 - **Phase**: ALL COMPLETE
-- **状态**: Step-MCP-3 完成（mock-router 放权 + 规范决策硬规则 + provider/model/preset 覆盖 + Web UI 选择器）
+- **状态**: Step-MCP-4 完成（_meta.json 约束建模 + OpenAPI 映射 + BaseModel auto-validate + diff 富化）
 
 ## 已完成 Step
 - [x] Step 1: 项目初始化 (d759059)
@@ -31,6 +31,7 @@
 - [x] **Step-MCP-1**: MCP Server 只读骨架 — API Key 鉴权 + HTTP Streamable Transport + 3 只读工具 + guide Resource + Settings API Keys Tab
 - [x] **Step-MCP-2**: MCP 写能力 + 业务侧感知 + 交接报告 — 12 个 MCP 工具全集 + access log + progress notifications + 软 warnings + dry_run + handoff report + headless-session 桥接
 - [x] **Step-MCP-3**: Mock 保真度 + 规范契约 + 选择器入口 — mock-router 放权 + system-prompt 规范决策硬规则 + MCP provider/model/preset 覆盖 + Web UI 新建对话 dialog + 对话中 meta-bar 切换
+- [x] **Step-MCP-4**: 元数据约束建模 + OpenAPI 映射 + 强 diff — _meta.json 字段约束 (enum/min/max/pattern/unique) + entity.constraints 跨字段规则 + openapi-export 全面映射 + BaseModel.withMeta() auto-validate + diff_with_openapi constraint-violation/cross-field-violation + update_module 富 diff
 
 ## Step-Chat-Resumable 变更摘要
 计划文档: `plans/STEP-CHAT-RESUMABLE-PLAN.md`
@@ -348,5 +349,38 @@
 - 关键回归: page-chat(23/23) + api-data(13/13) + mcp-server-v2 ex-M25/M32(25/25) + api + responsive(51/51) + chat-resumable + page-modules + page-data-management + navigation + e2e-flows + step-ux-polish-3..5 = **223 passed**
 - 已知 flaky（不阻塞验收）: M25/M32 真实 LLM 测试沿用 CURSOR.md 原策略（Playwright retries 策略使其最终绿）
 
+## Step-MCP-4 变更摘要
+目标:让"对话式注入业务约束"在 MCP 工具链端到端贯通 — 同一份 _meta.json 既驱动 OpenAPI 契约、又驱动 BaseModel 运行时校验、又驱动 diff_with_openapi 对账。
+
+### 起因(用户实测痛点)
+用户用 Cursor AI Agent 对 warehouse 模块跑 update_module 注入业务规则:
+- ✅ api-doc.md / test.ts 都被改了
+- ✗ get_openapi 输出里 status 仍是 string,没 enum
+- ✗ diff_with_openapi 拿不到约束信息
+- ✗ update_module 返回 "no structural diff detected" 误判 AI 没改
+
+### 核心改动
+- **_meta.json schema 扩展**(`src/server/core/meta-schema.ts`):新增 enum/min/max/pattern/minLength/maxLength/unique/description/default + entity.constraints[] (when/must/message + 范围条件 gt/lte 等);旧 enumValues/defaultValue 自动归一化
+- **openapi-export 全面映射**(`src/server/core/openapi-export.ts`):field 约束 → schema.enum/minimum/maximum/pattern/minLength/maxLength/description/default;entity.constraints → POST/PUT/PATCH endpoint description 末尾 markdown 块
+- **BaseModel.withMeta() auto-validate**(`src/server/core/base-model.ts` + `validator.ts`):controller 一行 `.withMeta('moduleName')` 接入,POST/PUT 自动校验,违反抛 `ValidationError`,模板 try/catch 转 400;支持 PATCH 语义(与 existingRow 合并后再校验跨字段);unique 走 DB 查询;未调用 .withMeta() 的老 controller 完全不受影响(back-compat)
+- **diff_with_openapi 强化**(`src/server/mcp/tools/diff-with-openapi.ts`):新增 `constraint-violation` (enum/min/max/pattern) 和 `cross-field-violation` (从 _meta.json 直接读 entity.constraints);GET 跳过跨字段检查
+- **update_module 富 diff**(`src/server/mcp/lib/update-diff.ts`):snapshot 加 constraintIds + testNames + controllerErrorBranches + controllerBytes + apiDocLines;diff 输出 `+constraint <id>` / `+test "<name>"` 等明细 + warnings (controller drift / api-doc drift) + `hasChange=false` 显式 silent-no-op 提醒
+- **bulk_generate 约束感知**(`src/server/agent/tools/manage-data.ts`):faker 尊重 enum/min/max(单字段);跨字段约束在 seed 时跳过(用无 .withMeta() 的 model)
+- **system-prompt 引导**(`src/server/agent/system-prompt.ts`):controller 模板改为 `.withMeta() + try/catch ValidationError`;新加"表达业务约束的优先级"段:**禁止**在 controller.ts 手写 if-throw 校验,优先 _meta.json field/constraints
+
+### 测试
+- `tests/meta-schema.spec.ts` — MS01-MS09 类型 + 归一化(9)
+- `tests/openapi-constraints.spec.ts` — OC01-OC07 字段约束 + 跨字段 → OpenAPI 映射(7)
+- `tests/validator.spec.ts` — V01-V16 单字段 + 跨字段 + PATCH 合并 + 范围条件(16)
+- `tests/base-model-validate.spec.ts` — B01-B08 真实 HTTP 流 + back-compat(8)
+- `tests/diff-with-openapi-constraints.spec.ts` — DC01-DC06 enum/min/pattern/cross-field 检测(6)
+- `tests/update-module-richdiff.spec.ts` — RD01-RD14 snapshot/diff helpers + multi-signal(14)
+- `tests/mcp-warehouse-constraints.spec.ts` — WC01-WC07 端到端复刻用户场景(7)
+
+### 测试结果
+- 新增测试: **67 全绿** (MS:9 + OC:7 + V:16 + B:8 + DC:6 + RD:14 + WC:7)
+- 关键回归: api-data(13) + mcp-server-v2 ex-M25/M32(25) + mcp-warehouse-e2e(6) + manage-data-resolve(2) + mock-router-response(8) + step-ux-polish-5(8) = 62 + UI 完整批 (page-chat:23, chat-resumable, page-modules, page-data-management, navigation, e2e-flows = 86) = **148 passed**
+- 已知 flaky(不阻塞):M25/M32 真实 LLM 测试沿用 Playwright retries 策略
+
 ## 下一步
-Phase 6 已完成（MCP-1 + MCP-2 + MCP-3）。若未来需要：细粒度权限 Key（只读/写分级）、stdio transport、sampling-based 生成优化，再开 Step-MCP-4。
+Phase 6 已完成（MCP-1 + MCP-2 + MCP-3 + MCP-4）。若未来需要：细粒度权限 Key（只读/写分级）、stdio transport、sampling-based 生成优化，再开 Step-MCP-5。

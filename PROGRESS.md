@@ -8,7 +8,7 @@
 | 3 | 前端 — 对话 | ✅ 完成 |
 | 4 | 前端 — 模块管理 | ✅ 完成 |
 | 5 | 增强 | ✅ 完成 |
-| 6 | MCP 集成 | ✅ 完成（Step-MCP-1 + Step-MCP-2 + Step-MCP-3）|
+| 6 | MCP 集成 | ✅ 完成（Step-MCP-1 + Step-MCP-2 + Step-MCP-3 + Step-MCP-4）|
 
 ## Phase 1：项目基础
 
@@ -99,6 +99,18 @@
 - 新增 27 条测试（mock-router-response MR01-08 + system-prompt SP01-06 + mcp-priority P01-07 + page-chat-new-session NS01-04 + page-chat-switch SW01-03 + mcp-server-v2 M33-37）
 - 关键回归 223 passed（page-chat 23, api-data 13, mcp-server-v2 ex-LLM 25, api+responsive 51, chat-resumable, page-modules, page-data-management, navigation, e2e-flows, step-ux-polish-3..5 等）
 - 已知 flaky（不阻塞）：M25/M32 真实 LLM 测试沿用 CURSOR.md 既有 retries 策略
+- 详见 `CURSOR.md` 对应章节
+
+### Step-MCP-4: 元数据约束建模 + OpenAPI 映射 + 强 diff ✅
+- **_meta.json schema 扩展**(`core/meta-schema.ts`):字段加 enum/min/max/pattern/minLength/maxLength/unique/description/default;实体加 constraints[] = { id?, when, must, message } 表达跨字段规则;旧 enumValues/defaultValue 自动归一化
+- **openapi-export 全面映射**(`core/openapi-export.ts`):field 约束 → schema.enum/minimum/maximum/pattern 等;entity.constraints → POST/PUT/PATCH endpoint description 末尾 markdown 块
+- **BaseModel.withMeta() auto-validate**(`core/base-model.ts` + `core/validator.ts`):controller 一行 `.withMeta('moduleName')` 接入自动校验;违反抛 ValidationError,模板 try/catch 转 400;PATCH 与 existingRow 合并后再校验跨字段;unique 走 DB 查询
+- **diff_with_openapi 强化**(`mcp/tools/diff-with-openapi.ts`):新增 constraint-violation + cross-field-violation;跨字段直接读 _meta.json
+- **update_module 富 diff**(`mcp/lib/update-diff.ts`):snapshot 加 constraintIds + testNames + controllerErrorBranches + apiDocLines;输出 +constraint/+test 明细 + warnings (controller/api-doc drift) + hasChange=false 显式 silent-no-op 提醒
+- **bulk_generate 约束感知**:faker 尊重 enum/min/max;跨字段约束在 seed 时跳过
+- **system-prompt 引导**:controller 模板改为 .withMeta() + try/catch ValidationError;新加"表达业务约束的优先级"段
+- 新增 67 条测试 (meta-schema:9 + openapi-constraints:7 + validator:16 + base-model-validate:8 + diff-with-openapi-constraints:6 + update-module-richdiff:14 + warehouse-constraints e2e:7)
+- 关键回归 148 passed (api-data 13, mcp-server-v2 ex-LLM 25, mcp-warehouse-e2e 6, manage-data-resolve 2, mock-router-response 8, step-ux-polish-5 8, page-chat 23 + chat-resumable + page-modules + page-data-management + navigation + e2e-flows ≈86)
 - 详见 `CURSOR.md` 对应章节
 
 ## 关键决策记录

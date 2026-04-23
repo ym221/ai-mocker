@@ -42,24 +42,38 @@ function fakerByFieldName(field: MetaField): unknown {
 }
 
 function generateFakerValue(field: MetaField): unknown {
+  // Field-level constraint awareness (Step-MCP-4): if enum is declared, always
+  // pick from it regardless of type; if min/max are declared, clamp numeric
+  // generation to the range. Keeps bulk_generate from violating obvious
+  // single-field constraints.
+  const enumValues = (field as any).enum ?? field.enumValues;
+  if (Array.isArray(enumValues) && enumValues.length > 0) {
+    return faker.helpers.arrayElement(enumValues);
+  }
+
   switch (field.type) {
     case 'string':
     case 'text':
       return fakerByFieldName(field);
     case 'integer':
-    case 'int':
-      return faker.number.int({ min: 1, max: 1000 });
+    case 'int': {
+      const min = typeof (field as any).min === 'number' ? (field as any).min : 1;
+      const max = typeof (field as any).max === 'number' ? (field as any).max : 1000;
+      return faker.number.int({ min, max });
+    }
     case 'decimal':
     case 'float':
-    case 'number':
-      return Number(faker.finance.amount({ min: 1, max: 10000, dec: 2 }));
+    case 'number': {
+      const min = typeof (field as any).min === 'number' ? (field as any).min : 1;
+      const max = typeof (field as any).max === 'number' ? (field as any).max : 10000;
+      return Number(faker.finance.amount({ min, max, dec: 2 }));
+    }
     case 'boolean':
       return faker.datatype.boolean() ? 1 : 0;
     case 'enum':
-      if (field.enumValues?.length) {
-        return faker.helpers.arrayElement(field.enumValues);
-      }
-      return field.defaultValue || 'unknown';
+      // already handled at top via enumValues; this is only for legacy
+      // enum-type fields without enum array
+      return (field as any).default ?? field.defaultValue ?? 'unknown';
     case 'date':
     case 'datetime':
       return faker.date.recent().toISOString().slice(0, 19).replace('T', ' ');
@@ -190,7 +204,11 @@ export async function manageData(
   const effectiveTable = healedPhysical.replace(new RegExp(`^mock__${userId}_`), 'mock__');
 
   return mockContext.run({ userId }, () => {
-    const model = new BaseModel(effectiveTable);
+    // .withMeta() opts the model into auto-validation against _meta.json
+    // constraints (enum/min/max/pattern/unique/required + cross-field). MCP
+    // manage_data callers expect business-rule violations to surface as
+    // ValidationError → MCP wrapper turns it into isError + message.
+    const model = new BaseModel(effectiveTable).withMeta(moduleName);
 
     switch (action) {
       case 'list': {
@@ -221,12 +239,19 @@ export async function manageData(
         const rules = options?.rules || {};
         const results: Record<string, unknown>[] = [];
 
+        // bulk_generate is a SEED operation — random faker data may violate
+        // entity.constraints (cross-field rules) which we can't reliably
+        // synthesize compliant data for. Bypass validation by using a plain
+        // BaseModel without .withMeta(). Single-field constraints are still
+        // respected by the constraint-aware faker (enum / min / max above).
+        const seedModel = new BaseModel(effectiveTable);
+
         for (let i = 0; i < count; i++) {
           const record: Record<string, unknown> = {};
           for (const field of fields) {
             record[field.name] = applyRule(field, rules[field.name], i);
           }
-          results.push(model.create(record));
+          results.push(seedModel.create(record));
         }
         return { generated: results.length };
       }

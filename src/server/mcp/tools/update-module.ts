@@ -9,6 +9,7 @@ import { getMcpUser } from '../context.js';
 import { runHeadlessSession, type HeadlessProgress } from '../lib/headless-session.js';
 import { summarizeEndpoints, readModuleMeta } from '../../core/openapi-export.js';
 import { bumpRetryCounter } from '../lib/retry-counter.js';
+import { findInFlightSession } from '../lib/in-flight-lock.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -97,6 +98,23 @@ export function registerUpdateModuleTool(server: McpServer): void {
             status: 'would-update',
             instruction,
             currentEndpoints: endpoints,
+          },
+        };
+      }
+
+      // 去重: 拒绝对同一 moduleName 的并发修改(避免客户端重试造成双 session)
+      const { inFlight, existingSessionId } = findInFlightSession(user.userId, moduleName);
+      if (inFlight) {
+        return {
+          isError: true,
+          content: [{
+            type: 'text',
+            text: `Module "${moduleName}" is already being processed (session ${existingSessionId}). Wait for it to finish or inspect it in the Web UI.`,
+          }],
+          structuredContent: {
+            moduleName,
+            status: 'already-processing',
+            existingSessionId,
           },
         };
       }

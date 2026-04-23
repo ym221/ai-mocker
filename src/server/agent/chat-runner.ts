@@ -508,8 +508,10 @@ export class ChatRunner {
     this.armRunTimeout();
 
     // 5. Kick off AI (or fake) in background
+    // Test sentinels use includes() (not startsWith) so they survive MCP-tool
+    // userContent wrapping like "请根据以下 API 规范/需求...规范内容：__fake_slow__".
     const u = opts.userContent || '';
-    if (process.env.FAKE_AI === '1' || u.startsWith('__fake__') || u.startsWith('__fake_slow__')) {
+    if (process.env.FAKE_AI === '1' || u.includes('__fake__') || u.includes('__fake_slow__')) {
       void this.runFakeGeneration();
     } else {
       void this.runAIGeneration(opts.userId, session);

@@ -10,6 +10,7 @@ import { getMcpUser } from '../context.js';
 import { runHeadlessSession, type HeadlessProgress } from '../lib/headless-session.js';
 import { buildOpenApi, summarizeEndpoints } from '../../core/openapi-export.js';
 import { bumpRetryCounter } from '../lib/retry-counter.js';
+import { findInFlightSession } from '../lib/in-flight-lock.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -126,6 +127,26 @@ export function registerCreateModuleFromSpecTool(server: McpServer): void {
             plan,
           },
         };
+      }
+
+      // ---- 去重: 拒绝对同一 moduleName 的并发创建 ----
+      // IDE AI Agent 在 MCP 超时后常重试;避免第二次调用起第二个 session + runner。
+      if (moduleName) {
+        const { inFlight, existingSessionId } = findInFlightSession(user.userId, moduleName);
+        if (inFlight) {
+          return {
+            isError: true,
+            content: [{
+              type: 'text',
+              text: `Module "${moduleName}" is already being created (session ${existingSessionId}). Wait for it to finish or inspect it in the Web UI. If you believe that session is stuck, cancel it first before retrying.`,
+            }],
+            structuredContent: {
+              moduleName,
+              status: 'already-processing',
+              existingSessionId,
+            },
+          };
+        }
       }
 
       // ---- 正式生成 ----

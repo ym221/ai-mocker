@@ -1,20 +1,8 @@
 import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
+import { normalizeMeta, type ModuleMeta, type MetaField, type EntityConstraint } from './meta-schema.js';
 
 const GENERATED_DIR = resolve('generated');
-
-interface MetaField { name: string; type?: string; displayName?: string; required?: boolean }
-interface MetaEntity { name: string; fields?: MetaField[] }
-interface MetaEndpoint { name?: string; type?: string; method?: string; path?: string }
-interface ModuleMeta {
-  name?: string;
-  displayName?: string;
-  description?: string;
-  version?: number | string;
-  basePath?: string;
-  entities?: MetaEntity[];
-  endpoints?: MetaEndpoint[];
-}
 
 function fieldTypeToOpenApi(t: string): { type: string; format?: string } {
   switch (t) {
@@ -32,7 +20,8 @@ export type { ModuleMeta };
 export function readModuleMeta(userId: number, moduleName: string): ModuleMeta | null {
   const metaPath = join(GENERATED_DIR, String(userId), moduleName, '_meta.json');
   if (!existsSync(metaPath)) return null;
-  try { return JSON.parse(readFileSync(metaPath, 'utf-8')) as ModuleMeta; } catch { return null; }
+  try { return normalizeMeta(JSON.parse(readFileSync(metaPath, 'utf-8')) as ModuleMeta); }
+  catch { return null; }
 }
 
 /** 基于模块的 _meta.json 构造 OpenAPI 3.0.3 spec。返回 null 表示 meta 不存在。 */

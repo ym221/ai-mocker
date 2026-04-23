@@ -7,47 +7,12 @@ import { db } from '../../core/database.js';
 import { modules } from '../../core/schema.js';
 import { getMcpUser } from '../context.js';
 import { runHeadlessSession, type HeadlessProgress } from '../lib/headless-session.js';
-import { summarizeEndpoints, readModuleMeta } from '../../core/openapi-export.js';
+import { summarizeEndpoints } from '../../core/openapi-export.js';
 import { bumpRetryCounter } from '../lib/retry-counter.js';
 import { findInFlightSession } from '../lib/in-flight-lock.js';
+import { snapshotMeta, diffSnapshots } from '../lib/update-diff.js';
 
 const GENERATED_DIR = resolve('generated');
-
-interface MetaSnapshot {
-  entityNames: Set<string>;
-  fieldsByEntity: Map<string, Set<string>>;
-  endpoints: Set<string>;
-}
-
-function snapshotMeta(userId: number, moduleName: string): MetaSnapshot {
-  const meta = readModuleMeta(userId, moduleName);
-  const entityNames = new Set<string>();
-  const fieldsByEntity = new Map<string, Set<string>>();
-  for (const ent of meta?.entities || []) {
-    entityNames.add(ent.name);
-    fieldsByEntity.set(ent.name, new Set((ent.fields || []).map((f) => f.name)));
-  }
-  const endpoints = new Set((meta?.endpoints || []).map((ep) => `${String(ep.method || '').toUpperCase()} ${ep.path || ''}`));
-  return { entityNames, fieldsByEntity, endpoints };
-}
-
-function diffSnapshots(before: MetaSnapshot, after: MetaSnapshot): string[] {
-  const diffs: string[] = [];
-
-  for (const n of after.entityNames) if (!before.entityNames.has(n)) diffs.push(`+entity ${n}`);
-  for (const n of before.entityNames) if (!after.entityNames.has(n)) diffs.push(`-entity ${n}`);
-
-  for (const [name, afterFields] of after.fieldsByEntity) {
-    const beforeFields = before.fieldsByEntity.get(name) || new Set();
-    for (const f of afterFields) if (!beforeFields.has(f)) diffs.push(`+field ${name}.${f}`);
-    for (const f of beforeFields) if (!afterFields.has(f)) diffs.push(`-field ${name}.${f}`);
-  }
-
-  for (const ep of after.endpoints) if (!before.endpoints.has(ep)) diffs.push(`+endpoint ${ep}`);
-  for (const ep of before.endpoints) if (!after.endpoints.has(ep)) diffs.push(`-endpoint ${ep}`);
-
-  return diffs;
-}
 
 function readModuleApiDocHead(userId: number, moduleName: string): string {
   const p = join(GENERATED_DIR, String(userId), moduleName, 'api-doc.md');
@@ -161,26 +126,34 @@ export function registerUpdateModuleTool(server: McpServer): void {
       }
 
       const after = snapshotMeta(user.userId, moduleName);
-      const diff = diffSnapshots(before, after);
+      const richDiff = diffSnapshots(before, after);
       const apiDoc = readModuleApiDocHead(user.userId, moduleName);
 
-      // retry counter
-      const warnings = bumpRetryCounter(`${user.userId}:${moduleName}:update`);
+      // retry counter (existing soft warnings)
+      const retryWarnings = bumpRetryCounter(`${user.userId}:${moduleName}:update`);
+      const allWarnings = [...richDiff.warnings, ...retryWarnings];
+
+      const summaryText = richDiff.lines.length
+        ? `Updated "${moduleName}":\n  ${richDiff.lines.join('\n  ')}`
+        : `Updated "${moduleName}" (no structural diff detected)`;
+      const warningSuffix = richDiff.warnings.length
+        ? `\nNotes:\n  ${richDiff.warnings.join('\n  ')}`
+        : '';
 
       return {
         content: [{
           type: 'text',
-          text: diff.length
-            ? `Updated "${moduleName}":\n  ${diff.join('\n  ')}`
-            : `Updated "${moduleName}" (no structural diff detected)`,
+          text: summaryText + warningSuffix,
         }],
         structuredContent: {
           moduleName,
           status: 'updated',
           sessionId: result.sessionId,
-          diff,
+          diff: richDiff.lines,
+          structuralOnly: richDiff.lines.length > 0 && richDiff.warnings.length === 0,
+          hasChange: richDiff.hasChange,
           apiDocPreview: apiDoc,
-          warnings,
+          warnings: allWarnings,
         },
       };
     }

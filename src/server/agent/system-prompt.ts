@@ -226,11 +226,21 @@ CREATE TABLE IF NOT EXISTS \`mock__todo\` (
 \`\`\`
 
 ### 3. todo/controller.ts（**必须是命名导出的 list/getById/create/update/remove 函数，不能用 default export**）
+
+**重要**：使用 \`new BaseModel('xxx').withMeta('moduleName')\` 把 _meta.json 里的字段约束（enum/min/max/pattern/unique/required）+ 跨字段约束（entity.constraints）自动接入 BaseModel.create/update。controller 只负责把 ValidationError 转成 \`{ success:false, message, statusCode: 400 }\`。
+
 \`\`\`ts
-import { BaseModel } from '@core/base-model.js';
+import { BaseModel, ValidationError } from '@core/base-model.js';
 import { success, paginated } from '@core/response.js';
 
-const model = new BaseModel('mock__todo');
+const model = new BaseModel('mock__todo').withMeta('todo');
+
+function asValidationFail(e: unknown) {
+  if (e instanceof ValidationError) {
+    return { success: false, message: e.message, statusCode: 400 };
+  }
+  throw e;
+}
 
 export function list(query: Record<string, string>) {
   const page = Number(query.page) || 1;
@@ -248,15 +258,15 @@ export function getById(id: string) {
 }
 
 export function create(body: Record<string, unknown>) {
-  const item = model.create(body);
-  return success(item, '创建成功');
+  try { return success(model.create(body), '创建成功'); }
+  catch (e) { return asValidationFail(e); }
 }
 
 export function update(id: string, body: Record<string, unknown>) {
   const existing = model.findById(Number(id));
   if (!existing) return { success: false, message: '记录不存在', statusCode: 404 };
-  const item = model.update(Number(id), body);
-  return success(item, '更新成功');
+  try { return success(model.update(Number(id), body), '更新成功'); }
+  catch (e) { return asValidationFail(e); }
 }
 
 export function remove(id: string) {
@@ -264,6 +274,29 @@ export function remove(id: string) {
   if (!deleted) return { success: false, message: '记录不存在', statusCode: 404 };
   return success(null, '删除成功');
 }
+\`\`\`
+
+### 表达业务约束的优先级（**强制**，违反 = 严重错误）
+
+不要在 controller.ts 手写 if-throw 校验代码。优先把约束写进 _meta.json,BaseModel.withMeta() 会自动接管。
+
+| 约束类型 | 写在哪里 | 例 |
+|---------|---------|----|
+| 必填 | \`field.required: true\` | \`{ name: "sku", required: true }\` |
+| 枚举 | \`field.enum: [...]\` | \`{ name: "status", enum: ["a", "b", "c"] }\` |
+| 数值范围 | \`field.min / field.max\` | \`{ name: "qty", min: 0, max: 1000 }\` |
+| 字符串长度 | \`field.minLength / maxLength\` | \`{ name: "code", minLength: 3, maxLength: 32 }\` |
+| 字符串格式 | \`field.pattern\` (正则) | \`{ name: "sku", pattern: "^[A-Z0-9-]+$" }\` |
+| 唯一性 | \`field.unique: true\` | \`{ name: "email", unique: true }\` |
+| 跨字段规则 | \`entity.constraints[]\` | \`{ when: { qty: 0 }, must: { status: "out_of_stock" }, message: "..." }\` |
+| 复杂业务流转 (状态机/关联) | controller.ts 手写 | 仅在以上方式都不够时 |
+
+跨字段规则示例:
+\`\`\`json
+"constraints": [
+  { "id": "qty-zero", "when": { "qty": 0 }, "must": { "status": "out_of_stock" }, "message": "数量为 0 时,状态必须为 out_of_stock" },
+  { "id": "low-stock", "when": { "qty": { "gt": 0, "lte": 10 } }, "must": { "status": "low_stock" }, "message": "数量 ≤10 时必须 low_stock" }
+]
 \`\`\`
 
 ### 4. todo/test.ts（**必须用 @core/test-runner.js 提供的 test/assert/request，不要用 describe/expect/chai/jest**）

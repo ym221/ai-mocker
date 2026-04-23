@@ -1,5 +1,13 @@
 import { AsyncLocalStorage } from 'async_hooks';
+import { existsSync, readFileSync } from 'fs';
+import { join, resolve } from 'path';
 import { sqlite } from './database.js';
+import { normalizeMeta, type MetaEntity } from './meta-schema.js';
+import { validate, ValidationError } from './validator.js';
+
+export { ValidationError } from './validator.js';
+
+const GENERATED_DIR = resolve('generated');
 
 // AsyncLocalStorage for userId context
 export interface MockContext {
@@ -41,10 +49,41 @@ interface FindAllResult {
 
 export class BaseModel {
   private baseTableName: string;
+  /**
+   * Optional metadata entity bound via withMeta(). When set, create()/update()
+   * automatically validate against field + cross-field constraints. Failures
+   * throw ValidationError, which controllers should catch and return as
+   * { success: false, message, statusCode: 400 }.
+   */
+  private boundEntity: MetaEntity | null = null;
 
   constructor(tableName: string) {
     // Store the base table name (e.g., 'mock__order')
     this.baseTableName = tableName;
+  }
+
+  /**
+   * Bind this model to the entity in `{moduleName}/_meta.json` whose tableName
+   * matches this model's table (or, if no exact match, the first entity).
+   * Once bound, create()/update() perform automatic validation against the
+   * declared field + cross-field constraints. If the meta file doesn't exist
+   * the model degrades gracefully (no validation), preserving back-compat.
+   */
+  withMeta(moduleName: string): this {
+    const ctx = mockContext.getStore();
+    // We can be called outside mockContext (controllers run inside it, but
+    // module loading happens at import time). Use getStore() lazily in get
+    // path; meta lookup itself doesn't need userId.
+    const userIdHint = ctx?.userId ?? 1;
+    const metaPath = join(GENERATED_DIR, String(userIdHint), moduleName, '_meta.json');
+    if (!existsSync(metaPath)) return this;
+    try {
+      const meta = normalizeMeta(JSON.parse(readFileSync(metaPath, 'utf-8')));
+      const entities = meta.entities || [];
+      const matched = entities.find(e => e.tableName === this.baseTableName) || entities[0];
+      if (matched) this.boundEntity = matched;
+    } catch { /* malformed meta — silently skip validation */ }
+    return this;
   }
 
   /** Get the actual table name with userId prefix */
@@ -57,6 +96,39 @@ export class BaseModel {
     // Extract the part after 'mock__'
     const suffix = this.baseTableName.replace(/^mock__/, '');
     return `mock__${ctx.userId}_${suffix}`;
+  }
+
+  /** If meta is bound, throw ValidationError on constraint failure. No-op otherwise. */
+  private maybeValidate(data: Record<string, unknown>, ctx: 'create' | 'update', existingRow?: Record<string, unknown> | null): void {
+    if (!this.boundEntity) return;
+    validate(this.boundEntity, data, { context: ctx, existingRow });
+    // unique check: only on create (update would need exclusion of self by id;
+    // can be added later if needed). Falls back to DB UNIQUE constraint if
+    // schema.sql declares it.
+    if (ctx === 'create') {
+      for (const f of this.boundEntity.fields || []) {
+        if (!f.unique) continue;
+        if (!(f.name in data)) continue;
+        const v = data[f.name];
+        if (v === null || v === undefined) continue;
+        const tableName = this.getTableName();
+        const dup = sqlite.prepare(
+          `SELECT id FROM \`${tableName}\` WHERE \`${f.name}\` = ? LIMIT 1`
+        ).get(v as string | number);
+        if (dup) {
+          throw new ValidationError(
+            `${f.displayName || f.name}已存在(${String(v)})`,
+            f.name,
+          );
+        }
+      }
+    }
+  }
+
+  /** Re-load the bound entity from _meta.json. Useful if AI rewrote the file mid-test. */
+  reloadMeta(moduleName: string): this {
+    this.boundEntity = null;
+    return this.withMeta(moduleName);
   }
 
   /** Build WHERE clause from conditions */
@@ -153,6 +225,9 @@ export class BaseModel {
     delete (cleanData as Record<string, unknown>).createdAt;
     delete (cleanData as Record<string, unknown>).updatedAt;
 
+    // Auto-validate against bound meta (no-op if .withMeta() was never called)
+    this.maybeValidate(cleanData, 'create');
+
     const columns = Object.keys(cleanData);
     const placeholders = columns.map(() => '?').join(', ');
     const values = Object.values(cleanData).map(normalizeBindValue);
@@ -171,6 +246,13 @@ export class BaseModel {
     delete cleanData.id;
     delete cleanData.created_at;
     delete (cleanData as Record<string, unknown>).createdAt;
+
+    // Auto-validate (partial-merge with existing row so cross-field rules see
+    // the post-update state, not just the patch fragment)
+    if (this.boundEntity) {
+      const existing = this.findById(id);
+      this.maybeValidate(cleanData, 'update', existing);
+    }
 
     // Set updated_at
     cleanData.updated_at = new Date().toISOString().replace('T', ' ').slice(0, 19);

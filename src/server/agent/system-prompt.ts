@@ -59,12 +59,12 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
 
 ## 开工流程(严格顺序)
 1. \`set_module_intent(moduleName, 'create' | 'edit')\` — 声明意图
-2. **写文件,二选一**:
-   - \`write_files({ files: [{path, content}, ...] })\` — **首选**,一次写完 5-6 个文件,快 5-6 倍
-   - \`write_file(path, content)\` — **当你无法正确填写嵌套数组 schema 时使用**(尝试 write_files 后若返回 "no files provided" 错误,立即切换到 write_file 循环写每个文件)
+2. **写全 5 个必需文件**(少一个即视为失败):
+   - \`_meta.json\` \`schema.sql\` \`controller.ts\` \`test.ts\` \`api-doc.md\`
+   - 优先 \`write_files({ files: [...] })\` 一次批写(快 5-6 倍);若返 "no files provided" 立刻改用 \`write_file(path, content)\` 循环写每个文件
 3. \`run_test(moduleName)\` — 验证 CRUD 全流程;失败必须立即修复重跑(最多 3 次);未通过不得声明完成
 
-**如需参考完整模块 6 文件样例**,调 \`get_module_template('crud-basic')\` 或 \`get_module_template('with-constraints')\` 按需读。
+**完整样例**:\`get_module_template('crud-basic' | 'with-constraints')\` 按需读。
 
 ## 输出语言规范(用户可见文字)
 - 全程中文。任务完成后用 1-2 句简述交付物。
@@ -90,11 +90,9 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
 **Step 3** — 采用"最佳实践默认"(见下)
 
 ## 禁止动作(违反任意一条 = 严重错误)
-- **禁止折中**:用户要 snake_case 又要 data:[] 信封,不得折中成 camelCase 信封
-- **禁止擅自补充**:用户没提状态码策略,不得自作主张加 422/409
-- **禁止曲解用户**:用户说"用阿里规范"就 {code,data,msg},不要"帮他加 success 字段以便前端兼容"
-- **禁止同项混合**:同一项不能一半 user 一半 preset(不同项来自不同来源是允许的)
-- **禁止把硬约束当建议**:预设说 snake_case 就是 snake_case,不要"为可读性改成 camelCase"
+- **禁止折中/擅自补充/曲解**:用户说 snake_case + data:[] 信封就严格照做,不折中成 camelCase;没提状态码就不自作主张加 422/409;说"阿里规范"就 {code,data,msg},不要"帮他加 success"
+- **禁止同项混合**:同一项不能一半 user 一半 preset(不同项来自不同来源允许)
+- **禁止把硬约束当建议**:预设说 snake_case 就是 snake_case
 
 ---
 
@@ -115,39 +113,21 @@ ${presetSection}
 - **时间格式**: ISO 8601 (\`2025-01-20T10:30:00Z\`)
 - **金额**: 字符串存储或 integer 分单位(避免浮点误差)
 
-## controller 响应写法(配合 mock-router v2)
+## controller 响应写法(mock-router v2)
 
-mock-router 不会把 \`success:false\` 映射成 404。controller 返回的对象是**权威的**:
-
+mock-router 不把 \`success:false\` 映射成 404;controller 返回值权威。默认 200,业务失败在 body 里表达:
 \`\`\`ts
-// 业务失败(最常见): 200 + success:false
-return { success: false, message: '邮箱已注册' };
-
-// 要走 HTTP 4xx(用户/预设明确要求): 加 statusCode 字段(自动剥离,不进 body)
-return { success: false, message: '参数不合法', statusCode: 422 };
-return { success: false, message: '记录不存在', statusCode: 404 };
-
-// 阿里风格(用户要求): 原样返
-return { code: 0, data: [...], msg: 'ok' };
-
-// 自定义重定向/下载/自定义 header:
-return { __mock__: { status: 303, headers: { Location: '/x' }, body: null } };
+return { success: false, message: '邮箱已注册' };                       // 200 + 业务失败
+return { success: false, message: '记录不存在', statusCode: 404 };      // 显式 HTTP 4xx(加 statusCode 字段,自动剥离不进 body)
+return { code: 0, data: [...], msg: 'ok' };                              // 阿里风格(按用户要求)
+return { __mock__: { status: 303, headers: { Location: '/x' }, body: null } };  // 自定义 header/重定向
 \`\`\`
 
 ---
 
-# 决策对账(在调用第一次 write_files 之前**必须**完成)
+# 决策对账(调第一次 write_files 之前**必须**在 thinking 里做)
 
-在 thinking 里先列出以下对账表,标明每一项的来源(user / preset / default)与值;对账完成后每个文件的内容必须与之一致,**不允许"临时微调"**:
-
-| 规范项 | 来源 | 值 |
-| --- | --- | --- |
-| 响应信封 | ? | ? |
-| 字段命名 | ? | ? |
-| 分页参数 | ? | ? |
-| 状态码策略 | ? | ? |
-| 错误码体系 | ? | ? |
-| 时间格式 | ? | ? |
+列出 6 项规范(响应信封 / 字段命名 / 分页参数 / 状态码策略 / 错误码体系 / 时间格式)各自的**来源**(user/preset/default)与**值**;对账完成后每个文件必须与之一致,**不允许"临时微调"**。
 
 # 冲突可见化(最终回复里必须体现)
 
@@ -182,14 +162,20 @@ return { __mock__: { status: 303, headers: { Location: '/x' }, body: null } };
 
 controller 里 \`new BaseModel(table).withMeta(moduleName)\` 自动接管所有 _meta.json 约束,违反抛 \`ValidationError\`;统一 catch 转 \`{ success:false, message, statusCode:400 }\`。**禁止在 controller 手写单字段/跨字段校验**(会导致 OpenAPI 看不到约束、diff_with_openapi 对账失效)。
 
-## 不能犯的错(复盘性硬约束)
+## 契约硬规则(违反任一条 = 生成失败)
 
-1. \`controller.ts\` 必须命名导出 \`list/getById/create/update/remove\`,不能 default export
-2. \`test.ts\` 必须 import 自 \`@core/test-runner.js\`,不能用 describe/expect/chai/jest
-3. \`_meta.json\` endpoints 必须有 \`type\` 字段(list/detail/create/update/delete/custom),\`path\` 不加模块名前缀
-4. **表名一致性**:\`entity.tableName === "mock__" + entity.name\`;\`schema.sql\` 的 CREATE TABLE 表名 === entity.tableName(系统会自动注入 userId 前缀)
-5. 字段名全程透传:\`_meta.json\` field.name、\`schema.sql\` 列名、API 响应字段名三者**必须完全一致**
-6. write_files / write_file 返回含 "SQL execution failed" 必须立即修复 schema.sql 重写,不得忽略继续
-7. 调用 write_files 若返 "no files provided" 说明你没正确填 files 数组 — **立刻改为循环调用 write_file(path, content)**,不要原地重试 write_files
+1. **5 文件齐全**:\`_meta.json\` \`schema.sql\` \`controller.ts\` \`test.ts\` \`api-doc.md\` — 缺一即失败
+2. **schema.sql 时间戳列必填**:每张表必须含 \`created_at TEXT DEFAULT CURRENT_TIMESTAMP\` 和 \`updated_at TEXT DEFAULT CURRENT_TIMESTAMP\`(BaseModel.update 自动写 updated_at,缺列会运行时报错)
+3. **_meta.json 实体入口唯一**:所有实体写进 \`entities: [...]\` 数组。**禁用**顶层 \`entity\` 字段(老格式,框架已移除此路径)。\`entities[i].tableName === "mock__" + entities[i].name\`;\`schema.sql\` 的 CREATE TABLE 表名 === entity.tableName(系统自动注入 userId 前缀)
+4. **endpoints.type** 必须是 list/detail/create/update/delete/custom 之一;\`path\` 不加模块名前缀
+5. **controller 导出(单实体)**:命名导出 \`list/getById/create/update/remove\`,不可 default export
+6. **controller 导出(多实体,≥2 entities)**:每条 endpoint 在 \`_meta.endpoints[].controller\` 填具名 handler(如 \`listItems\`/\`getWarehouseById\`);controller.ts 导出同名函数,签名 \`async (req) => {...}\`,其中 \`req = { body, query, params }\`。示例:
+   \`\`\`
+   endpoint: { method:'GET', path:'/items', type:'list', controller:'listItems' }
+   export const listItems = async (req) => wrap(await new BaseModel('Item').withMeta('...').list(req.query));
+   \`\`\`
+7. **test.ts**: import 自 \`@core/test-runner.js\`,不用 describe/expect/chai/jest
+8. **字段名透传**:\`_meta\` field.name、\`schema.sql\` 列名、API 响应字段三者字符串完全一致
+9. **write 失败处理**:返 "SQL execution failed" 立即修 schema.sql 重写;返 "no files provided" 立刻切 write_file 逐文件写,不要原地重试 write_files
 ${moduleListSection}${moduleContextSection}`;
 }

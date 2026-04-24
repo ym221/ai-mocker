@@ -54,24 +54,26 @@ test.describe('priority rules system prompt', () => {
   test('P04 prompt 始终包含禁止动作清单', () => {
     const prompt = buildSystemPrompt(base);
     expect(prompt).toContain('禁止动作');
-    // 这四条是决策完整性的保险
+    // Step-Fix-1.4 压缩后 3 类 "折中/擅自补充/曲解" 合并在同一条;语义和覆盖不变
     expect(prompt).toContain('禁止折中');
-    expect(prompt).toContain('禁止擅自补充');
-    expect(prompt).toContain('禁止曲解用户');
+    expect(prompt).toContain('擅自补充');
+    expect(prompt).toContain('曲解');
     expect(prompt).toContain('禁止同项混合');
   });
 
-  test('P05 prompt 包含决策对账要求(含字段表头和具体规范项)', () => {
+  test('P05 prompt 包含决策对账要求(含完整 6 项规范)', () => {
     const prompt = buildSystemPrompt(base);
     expect(prompt).toContain('决策对账');
     // 必须要求 AI 在 thinking 里填表,不能等 write_file 之后
-    expect(prompt).toMatch(/write_file.*之前[\s\S]*对账/);
-    // 表头
-    expect(prompt).toContain('| 规范项 | 来源 | 值 |');
-    // 核心规范项要全
-    for (const item of ['响应信封', '字段命名', '分页参数', '状态码策略', '错误码体系']) {
+    expect(prompt).toMatch(/write_file.*之前[\s\S]*thinking/);
+    // 核心规范项要全(6 项,Step-Fix-1.4 压缩成单行枚举形式节省 prompt 体积)
+    for (const item of ['响应信封', '字段命名', '分页参数', '状态码策略', '错误码体系', '时间格式']) {
       expect(prompt).toContain(item);
     }
+    // 要标明来源
+    expect(prompt).toContain('user');
+    expect(prompt).toContain('preset');
+    expect(prompt).toContain('default');
   });
 
   test('P06 preset 内容结构化到独立分区,不与默认段混排', () => {

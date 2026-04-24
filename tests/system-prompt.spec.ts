@@ -49,11 +49,14 @@ test.describe('system-prompt structure', () => {
     expect(prompt).toContain('Step 1');
     expect(prompt).toContain('Step 2');
     expect(prompt).toContain('Step 3');
+    // Step-Fix-1.4 压缩后 "禁止折中/擅自补充/曲解" 合并在一条,"禁止动作" 标题保留
     expect(prompt).toContain('禁止动作');
     expect(prompt).toContain('禁止折中');
-    expect(prompt).toContain('禁止擅自补充');
+    expect(prompt).toContain('禁止同项混合');
     expect(prompt).toContain('决策对账');
-    expect(prompt).toContain('| 规范项 | 来源 | 值 |');
+    // Step-Fix-1.4 把 6 行表格压缩成单行枚举,便于 AI 直接逐项对账
+    expect(prompt).toContain('响应信封');
+    expect(prompt).toContain('字段命名');
     expect(prompt).toContain('冲突可见化');
   });
 
@@ -94,8 +97,10 @@ test.describe('system-prompt structure', () => {
     expect(prompt).toContain('所有金额字段统一用 BigInt 分单位');
   });
 
-  test('SP07 slim 后的 prompt 体积 ≤ 8KB (原 18KB)', () => {
+  test('SP07 slim 后的 prompt 体积 ≤ 8.5KB (原 18KB)', () => {
     // 核心目的: Step-Perf-1.1 的提速来自 prompt 瘦身, 回归防止未来再次膨胀
+    // Step-Fix-1.4 把阈值从 8000 调到 8500(加了 5-file 清单 / 时间戳列 /
+    // 多实体 controller 样例等契约硬规则,净增 ~350 bytes,仍远低于原 18KB)
     const emptyPrompt = buildSystemPrompt(emptyParams);
     const withPresetPrompt = buildSystemPrompt({
       ...emptyParams,
@@ -103,12 +108,52 @@ test.describe('system-prompt structure', () => {
         content: JSON.stringify({ fieldNaming: 'snake_case', responseFormat: { success: true, data: null } }),
       },
     });
-    expect(Buffer.byteLength(emptyPrompt, 'utf8')).toBeLessThan(8000);
-    expect(Buffer.byteLength(withPresetPrompt, 'utf8')).toBeLessThan(8500);
+    expect(Buffer.byteLength(emptyPrompt, 'utf8')).toBeLessThan(8500);
+    expect(Buffer.byteLength(withPresetPrompt, 'utf8')).toBeLessThan(9000);
     // 指引 AI 用 get_module_template 按需拉样例,而不是把样例写死在 prompt 里
     expect(emptyPrompt).toContain('get_module_template');
     // 完整 todo 模板示例(120 行)应已移出,这些特征字符不能再出现在 prompt 里
     expect(emptyPrompt).not.toContain('CREATE TABLE IF NOT EXISTS `mock__todo`');
     expect(emptyPrompt).not.toContain("import { test, assert, request } from '@core/test-runner.js'");
+  });
+
+  test('SP08 (Step-Fix-1.4) 5 必需文件清单明示', () => {
+    const prompt = buildSystemPrompt(emptyParams);
+    // 开工流程段必须逐项列出 5 个必需文件,让 AI 无法"漏写 api-doc.md"
+    for (const f of ['_meta.json', 'schema.sql', 'controller.ts', 'test.ts', 'api-doc.md']) {
+      expect(prompt).toContain(f);
+    }
+    expect(prompt).toContain('必需文件');
+    expect(prompt).toContain('缺一');
+  });
+
+  test('SP09 (Step-Fix-1.4) schema.sql 硬规则要求 created_at + updated_at 列', () => {
+    const prompt = buildSystemPrompt(emptyParams);
+    expect(prompt).toContain('created_at');
+    expect(prompt).toContain('updated_at');
+    expect(prompt).toContain('CURRENT_TIMESTAMP');
+    // 解释原因,让 AI 理解不是可选规则
+    expect(prompt).toContain('BaseModel');
+  });
+
+  test('SP10 (Step-Fix-1.4) _meta.json 禁用 legacy entity 字段,只用 entities[]', () => {
+    const prompt = buildSystemPrompt(emptyParams);
+    expect(prompt).toContain('entities');
+    // 必须明确禁止,否则弱模型仍会凭记忆/训练分布写 entity 顶层字段
+    expect(prompt).toContain('禁用');
+    expect(prompt).toContain('老格式');
+  });
+
+  test('SP11 (Step-Fix-1.4) 多实体 controller 命名规则 + 必填 endpoint.controller', () => {
+    const prompt = buildSystemPrompt(emptyParams);
+    // 多实体场景必须说明 named-handler 方案
+    expect(prompt).toContain('多实体');
+    expect(prompt).toContain('endpoints[].controller');
+    // 具体示例: listItems / getWarehouseById 等命名模式
+    expect(prompt).toMatch(/listItems|getWarehouseById|createItem/);
+    // 签名说明 req = { body, query, params }
+    expect(prompt).toContain('body');
+    expect(prompt).toContain('query');
+    expect(prompt).toContain('params');
   });
 });

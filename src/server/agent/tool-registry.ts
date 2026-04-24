@@ -20,7 +20,12 @@ export function buildTools(userId: number, runner?: ChatRunner) {
 
   return {
     set_module_intent: tool({
-      description: '【必须在开始生成前调用】声明本次要创建或修改的模块。后端会对照数据库纠偏并更新模块状态。',
+      description:
+        '【必须在开始生成前调用】声明本次要创建或修改的模块。**重要**：此工具只声明意图，'
+        + '不代表已完成。调用本工具后你必须紧接着调用 write_files（优先）或多次 write_file '
+        + '把 5 个必需文件（_meta.json / schema.sql / controller.ts / test.ts / api-doc.md）'
+        + '落盘。不允许只声明意图就结束回复——框架会检测空产出并自动注入提示强制重试，'
+        + '两次后仍空会终止并报错。',
       parameters: z.object({
         moduleName: z.string().describe('Module name (英文，与文件目录一致)'),
         operation: z.enum(['create', 'edit']).describe('create = 新建模块; edit = 修改已有模块'),

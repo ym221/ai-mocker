@@ -16,6 +16,13 @@ interface MetaEndpoint {
   name: string;
   type: string;
   handler?: string;
+  /**
+   * Named controller export to dispatch to (Step-Fix-1.1).
+   * When set, mock-router calls `ctrl[controller]({ body, query, params })` instead of
+   * the legacy type-based `ctrl.list/getById/create/update/remove(...)` positional dispatch.
+   * Enables multi-entity modules (e.g. warehouse has listWarehouse / listItems / listInventory).
+   */
+  controller?: string;
 }
 
 interface ModuleMeta {
@@ -191,6 +198,21 @@ export default async function mockRouter(app: FastifyInstance) {
       const body = request.body as Record<string, unknown>;
 
       const result = mockContext.run({ userId }, () => {
+        // Preferred: explicit named controller export (multi-entity modules).
+        // _meta.endpoints[].controller = "listItems" → ctrl.listItems({ body, query, params })
+        const namedHandler = matchedEndpoint!.controller;
+        if (namedHandler) {
+          if (typeof ctrl[namedHandler] !== 'function') {
+            const available = Object.keys(ctrl).filter(k => typeof ctrl[k] === 'function').join(', ') || '(none)';
+            throw new Error(
+              `Controller export "${namedHandler}" not found (from _meta.endpoints[].controller). `
+              + `Available exports: ${available}`
+            );
+          }
+          return ctrl[namedHandler]({ body, query, params: matchedParams });
+        }
+
+        // Legacy type-based dispatch (single-entity modules).
         switch (matchedEndpoint!.type) {
           case 'list':
             return ctrl.list(query);

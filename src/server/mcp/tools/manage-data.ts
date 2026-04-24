@@ -48,9 +48,9 @@ export function registerManageDataTool(server: McpServer): void {
           code: code as any,
           message: `manage_data failed: ${msg}`,
           hint: isNotFound
-            ? 'Verify moduleName and that the table exists. Call get_module_health for diagnostics.'
+            ? 'Verify moduleName and that the table exists. Call inspect_module({ view: "health" }) for diagnostics.'
             : isValidation
-              ? 'Check your data against the module contract via get_openapi.'
+              ? 'Check your data against the module contract via inspect_module({ view: "openapi" }).'
               : 'Inspect server logs; retry if transient.',
           action,
           moduleName,

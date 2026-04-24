@@ -197,13 +197,13 @@ test.beforeEach(() => { cleanup(); seedWarehouseWithConstraints(); });
 test.afterAll(() => cleanup());
 
 test.describe('Step-MCP-4 端到端验收: warehouse + 约束 + diff', () => {
-  test('WC01 get_openapi 输出含 status enum + min/max + pattern + 跨字段 description', async () => {
+  test('WC01 inspect_module view=openapi 输出含 status enum + min/max + pattern + 跨字段 description', async () => {
     const key = await generateApiKey();
     const client = await connect(key);
     try {
-      const r = await client.callTool({ name: 'get_openapi', arguments: { moduleName: MODULE } });
-      const sc = (r as any).structuredContent as { openapi: any };
-      const props = sc.openapi.components.schemas.warehouse_item.properties;
+      const r = await client.callTool({ name: 'inspect_module', arguments: { moduleName: MODULE, view: 'openapi' } });
+      const spec = (r as any).structuredContent?.openapi?.spec as any;
+      const props = spec.components.schemas.warehouse_item.properties;
       // status enum
       expect(props.status.enum).toEqual(['in_stock', 'low_stock', 'out_of_stock']);
       // qty min/max
@@ -212,7 +212,7 @@ test.describe('Step-MCP-4 端到端验收: warehouse + 约束 + diff', () => {
       // sku pattern
       expect(props.sku.pattern).toBe('^[A-Z0-9-]{3,32}$');
       // POST endpoint description 含跨字段约束
-      const post = sc.openapi.paths[`/mock/${MODULE}/`].post;
+      const post = spec.paths[`/mock/${MODULE}/`].post;
       expect(post.description).toContain('业务约束');
       expect(post.description).toContain('qty-zero-status');
       expect(post.description).toContain('low-stock');

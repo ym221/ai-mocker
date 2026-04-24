@@ -301,7 +301,7 @@ export function registerDiffWithOpenApiTool(server: McpServer): void {
         return mcpError({
           code: MCP_ERROR_CODES.INTERNAL_ERROR,
           message: `Cannot build OpenAPI for '${moduleName}'.`,
-          hint: 'Call get_module_health to inspect the module.',
+          hint: 'Call inspect_module({ view: "health" }) to check the module.',
           moduleName,
         });
       }

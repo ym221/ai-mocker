@@ -56,14 +56,12 @@ MockForge 是 AI 驱动的 **Mock API 服务**。用户在 Web UI 对话生成 M
 - \`get_session_status(sessionId)\` — 5ms 轻量查状态（不阻塞），拿 status/stage/elapsedSec/recentEvents
 - \`cancel_session(sessionId)\` — 主动放弃，成功返回 status:"aborted"
 
-## 14 个工具
+## 12 个工具
 
 ### 读
 - \`list_modules\` — 列出当前用户的所有模块（name / status / health / endpoints / mockBaseUrl）
-- \`get_api_doc\` — 拿模块的 api-doc.md（人类可读）
-- \`get_openapi\` — 拿模块的 OpenAPI 3.0.3 JSON（机器可读）
+- \`inspect_module(moduleName, view?)\` — 一次拿模块的 API doc / OpenAPI / 健康状态(view: 'all'|'doc'|'openapi'|'health',默 all)
 - \`get_mock_access_log\` — 查业务代码最近打到 Mock 的真实请求和响应
-- \`get_module_health\` — 检查模块健康状态（5 文件 + 表 + _meta 结构）
 - \`diff_with_openapi\` — 把实际请求/响应与契约做结构化 diff
 
 ### 写（轻量，即时生效）
@@ -95,7 +93,7 @@ MockForge 是 AI 驱动的 **Mock API 服务**。用户在 Web UI 对话生成 M
    → 拿 mockBaseUrl，在业务代码里代理到这个地址
 
 ③ 有 → 拿契约写业务代码
-   → get_openapi({ moduleName })                       // 生成请求类型、客户端
+   → inspect_module({ moduleName, view: 'openapi' })   // 生成请求类型、客户端
 
 ④ 写完业务代码，跑业务测试
 
@@ -137,7 +135,7 @@ MockForge 是 AI 驱动的 **Mock API 服务**。用户在 Web UI 对话生成 M
 
 ## 软 warnings
 
-短期内对同一模块调 \`update_module\` 超过 10 次，返回会带 \`warnings: [{ code:"HIGH_RETRY_COUNT", ... }]\`，**不阻断**调用，但提示你可能陷入错误循环，建议先看 \`get_mock_access_log\` 和 \`get_module_health\` 诊断。
+短期内对同一模块调 \`update_module\` 超过 10 次，返回会带 \`warnings: [{ code:"HIGH_RETRY_COUNT", ... }]\`，**不阻断**调用，但提示你可能陷入错误循环，建议先看 \`get_mock_access_log\` 和 \`inspect_module({ view: 'health' })\` 诊断。
 
 ## dry_run 语义
 

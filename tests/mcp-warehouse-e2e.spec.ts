@@ -186,22 +186,22 @@ test.describe('warehouse 端到端 MCP 闭环验证', () => {
     } finally { await client.close(); }
   });
 
-  test('W02 MCP get_openapi 返回 PUT 引用 Patch schema (无 required)', async () => {
+  test('W02 MCP inspect_module view=openapi 返回 PUT 引用 Patch schema (无 required)', async () => {
     const key = await generateApiKey();
     const client = await connect(key);
     try {
-      const r = await client.callTool({ name: 'get_openapi', arguments: { moduleName: MODULE } });
-      const sc = (r as any).structuredContent as { openapi: any };
+      const r = await client.callTool({ name: 'inspect_module', arguments: { moduleName: MODULE, view: 'openapi' } });
+      const spec = (r as any).structuredContent?.openapi?.spec as any;
       // Patch schema 必须在 components
-      expect(sc.openapi.components.schemas).toHaveProperty(`warehouse_itemPatch`);
-      const patch = sc.openapi.components.schemas['warehouse_itemPatch'];
+      expect(spec.components.schemas).toHaveProperty(`warehouse_itemPatch`);
+      const patch = spec.components.schemas['warehouse_itemPatch'];
       expect(patch.required ?? []).toEqual([]);
       // PUT 引用 Patch
-      const putOp = sc.openapi.paths[`/mock/${MODULE}/{id}`]?.put;
+      const putOp = spec.paths[`/mock/${MODULE}/{id}`]?.put;
       expect(putOp.requestBody.content['application/json'].schema.$ref)
         .toBe('#/components/schemas/warehouse_itemPatch');
       // POST 仍引用完整 schema
-      const postOp = sc.openapi.paths[`/mock/${MODULE}/`]?.post;
+      const postOp = spec.paths[`/mock/${MODULE}/`]?.post;
       expect(postOp.requestBody.content['application/json'].schema.$ref)
         .toBe('#/components/schemas/warehouse_item');
     } finally { await client.close(); }

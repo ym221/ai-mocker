@@ -43,7 +43,7 @@ export function registerRunTestTool(server: McpServer): void {
           message: `run_test failed: ${msg}`,
           hint: isNotFound
             ? 'Verify moduleName. Call list_modules for a list.'
-            : 'Call get_module_health to inspect module state, or check server logs.',
+            : 'Call inspect_module({ view: "health" }) to check module state, or check server logs.',
           moduleName,
         });
       }

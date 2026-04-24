@@ -108,15 +108,18 @@ test.describe('MCP Server — 基础协议', () => {
     await client.close();
   });
 
-  test('M03 tools/list 至少包含 3 个 v1 读工具（v2 扩展后仍兼容）', async () => {
+  test('M03 tools/list 至少包含 list_modules + inspect_module 两个核心读工具', async () => {
     const key = await generateApiKeyFor('admin', 'admin123');
     const client = await connectClient(key);
     const list = await client.listTools();
     const names = list.tools.map((t) => t.name);
-    // v1 read-only baseline 必须仍存在
-    expect(names).toContain('get_api_doc');
-    expect(names).toContain('get_openapi');
+    // Step-Perf-1.5: get_api_doc + get_openapi + get_module_health 合并为 inspect_module
     expect(names).toContain('list_modules');
+    expect(names).toContain('inspect_module');
+    // 确保旧名字已移除 (若 AI 还在传旧名字会拿到 unknown tool)
+    expect(names).not.toContain('get_api_doc');
+    expect(names).not.toContain('get_openapi');
+    expect(names).not.toContain('get_module_health');
     await client.close();
   });
 });
@@ -138,31 +141,31 @@ test.describe('MCP Server — 只读工具', () => {
     await client.close();
   });
 
-  test('M05 get_api_doc 读取存在模块的文档', async () => {
+  test('M05 inspect_module view=doc 读取存在模块的文档', async () => {
     const key = await generateApiKeyFor('admin', 'admin123');
     const client = await connectClient(key);
-    const r = await client.callTool({ name: 'get_api_doc', arguments: { moduleName: 'user' } });
+    const r = await client.callTool({ name: 'inspect_module', arguments: { moduleName: 'user', view: 'doc' } });
     expect((r as any).isError).toBeFalsy();
-    const text = (r as any).content?.[0]?.text as string;
-    expect(text).toContain('用户管理 API');
+    const sc = (r as any).structuredContent as any;
+    expect(sc.doc.markdown).toContain('用户管理 API');
     await client.close();
   });
 
-  test('M06 get_openapi 输出合法 3.0.3 spec', async () => {
+  test('M06 inspect_module view=openapi 输出合法 3.0.3 spec', async () => {
     const key = await generateApiKeyFor('admin', 'admin123');
     const client = await connectClient(key);
-    const r = await client.callTool({ name: 'get_openapi', arguments: { moduleName: 'user' } });
+    const r = await client.callTool({ name: 'inspect_module', arguments: { moduleName: 'user', view: 'openapi' } });
     const sc = (r as any).structuredContent;
-    expect(sc?.openapi?.openapi).toBe('3.0.3');
-    expect(Object.keys(sc?.openapi?.paths || {}).length).toBeGreaterThan(0);
-    expect(sc?.openapi?.components?.schemas?.user).toBeTruthy();
+    expect(sc?.openapi?.spec?.openapi).toBe('3.0.3');
+    expect(Object.keys(sc?.openapi?.spec?.paths || {}).length).toBeGreaterThan(0);
+    expect(sc?.openapi?.spec?.components?.schemas?.user).toBeTruthy();
     await client.close();
   });
 
   test('M07 不存在模块返回 isError', async () => {
     const key = await generateApiKeyFor('admin', 'admin123');
     const client = await connectClient(key);
-    const r = await client.callTool({ name: 'get_api_doc', arguments: { moduleName: 'nope-xyz-404' } });
+    const r = await client.callTool({ name: 'inspect_module', arguments: { moduleName: 'nope-xyz-404' } });
     expect((r as any).isError).toBe(true);
     expect(((r as any).content?.[0]?.text || '') as string).toContain('not found');
     await client.close();
@@ -228,7 +231,7 @@ test.describe('MCP Server — 副作用 / 隔离', () => {
 
     // userB 直接访问 userA 的模块文档 → not found
     const clientB2 = await connectClient(keyB);
-    const r = await clientB2.callTool({ name: 'get_api_doc', arguments: { moduleName: 'user' } });
+    const r = await clientB2.callTool({ name: 'inspect_module', arguments: { moduleName: 'user', view: 'doc' } });
     expect((r as any).isError).toBe(true);
     await clientB2.close();
   });

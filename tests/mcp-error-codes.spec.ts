@@ -46,12 +46,12 @@ test.describe('Task 5.4 — unified error codes', () => {
     } finally { await c.close(); }
   });
 
-  test('EC02 get_api_doc 对不存在模块返 MODULE_NOT_FOUND + hint', async () => {
+  test('EC02 inspect_module 对不存在模块返 MODULE_NOT_FOUND + hint', async () => {
     const key = await generateApiKey();
     const c = await connect(key);
     try {
       const r = await c.callTool({
-        name: 'get_api_doc',
+        name: 'inspect_module',
         arguments: { moduleName: '__nope__' },
       }, undefined, { timeout: 10000 });
       expect((r as any).isError).toBe(true);

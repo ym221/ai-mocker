@@ -72,28 +72,29 @@ test.describe('MCP v2 — 只读增强工具', () => {
     await client.close();
   });
 
-  test('M13 get_module_health: user 模块健康', async () => {
+  test('M13 inspect_module view=health: user 模块健康', async () => {
     const key = await generateApiKey();
     const client = await connect(key);
     const r = await client.callTool({
-      name: 'get_module_health',
-      arguments: { moduleName: 'user' },
+      name: 'inspect_module',
+      arguments: { moduleName: 'user', view: 'health' },
     });
-    const sc = (r as any).structuredContent as { health: string; missingFiles: string[] };
-    expect(sc.health).toBe('healthy');
-    expect(sc.missingFiles.length).toBe(0);
+    const sc = (r as any).structuredContent as { health: { status: string; missingFiles: string[] } };
+    expect(sc.health.status).toBe('healthy');
+    expect(sc.health.missingFiles.length).toBe(0);
     await client.close();
   });
 
-  test('M14 get_module_health: 不存在模块返回 missing', async () => {
+  test('M14 inspect_module: 不存在模块返回 MODULE_NOT_FOUND error', async () => {
     const key = await generateApiKey();
     const client = await connect(key);
     const r = await client.callTool({
-      name: 'get_module_health',
-      arguments: { moduleName: 'absolutely-does-not-exist-xyz' },
+      name: 'inspect_module',
+      arguments: { moduleName: 'absolutely-does-not-exist-xyz', view: 'health' },
     });
-    const sc = (r as any).structuredContent as { health: string };
-    expect(sc.health).toBe('missing');
+    expect((r as any).isError).toBe(true);
+    const sc = (r as any).structuredContent as any;
+    expect(sc.code).toBe('MOCKFORGE_MODULE_NOT_FOUND');
     await client.close();
   });
 });
@@ -300,7 +301,7 @@ test.describe('MCP v2 — 轻量写工具', () => {
     await client.close();
   });
 
-  test('M30 tools/list 返回所有 14 个工具名', async () => {
+  test('M30 tools/list 返回所有 12 个工具名(inspect_module 合并 3 个读工具)', async () => {
     const key = await generateApiKey();
     const client = await connect(key);
     const list = await client.listTools();
@@ -311,11 +312,9 @@ test.describe('MCP v2 — 轻量写工具', () => {
       'delete_module',
       'diff_with_openapi',
       'generate_handoff_report',
-      'get_api_doc',
       'get_mock_access_log',
-      'get_module_health',
-      'get_openapi',
       'get_session_status',
+      'inspect_module',
       'list_modules',
       'manage_data',
       'run_test',

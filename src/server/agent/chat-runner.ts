@@ -749,6 +749,13 @@ export class ChatRunner {
                 if (part.toolName === 'write_file' && typeof a.path === 'string') {
                   const first = a.path.split('/')[0];
                   if (first && first !== a.path) affectedModules.add(first);
+                } else if (part.toolName === 'write_files' && Array.isArray(a.files)) {
+                  for (const f of a.files as Array<{ path?: unknown }>) {
+                    if (typeof f?.path === 'string') {
+                      const first = f.path.split('/')[0];
+                      if (first && first !== f.path) affectedModules.add(first);
+                    }
+                  }
                 } else if (part.toolName === 'run_test' && typeof a.moduleName === 'string') {
                   affectedModules.add(a.moduleName);
                 }

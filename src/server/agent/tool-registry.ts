@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { tool } from 'ai';
-import { writeFile } from './tools/write-file.js';
+import { writeFiles } from './tools/write-files.js';
 import { readFile } from './tools/read-file.js';
 import { runTest } from './tools/run-test.js';
 import { manageData } from './tools/manage-data.js';
@@ -25,14 +25,16 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         return { success: true, ...result };
       },
     }),
-    write_file: tool({
-      description: 'Write a file to generated/{userId}/ directory. SQL files are auto-executed. _meta.json auto-syncs to modules table.',
+    write_files: tool({
+      description: 'Write multiple files atomically in a single call. Use this for creating a new module (5-6 files at once) or any multi-file change. SQL files auto-execute; _meta.json auto-syncs to modules table. If any side-effect fails, the whole batch rolls back on both filesystem and DB.',
       parameters: z.object({
-        path: z.string().describe('File path relative to the module directory, e.g., "order/_meta.json"'),
-        content: z.string().describe('File content'),
+        files: z.array(z.object({
+          path: z.string().describe('File path relative to generated/{userId}/, e.g., "order/_meta.json"'),
+          content: z.string().describe('File content'),
+        })).min(1).describe('Files to write. Keep ordering meaningful: schema.sql should come before _meta.json if you want the SQL reconciliation to inform the meta sync.'),
       }),
-      execute: async ({ path, content }) => {
-        return writeFile(userId, path, content);
+      execute: async ({ files }) => {
+        return writeFiles(userId, { files });
       },
     }),
 

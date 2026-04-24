@@ -22,6 +22,7 @@ import { buildSystemPrompt } from './system-prompt.js';
 import { buildTools } from './tool-registry.js';
 import { createCompatFetch } from './compat-fetch.js';
 import { ThinkingParser } from './thinking-adapter.js';
+import { buildProviderOptions, reportCacheSupport } from './prompt-cache.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -707,6 +708,12 @@ export class ChatRunner {
       const affectedModules = new Set<string>();
       const assistantAccText: string[] = [];
 
+      // ===== Prompt-cache provider options =====
+      const cacheReport = reportCacheSupport(provider.type);
+      const providerOptions = buildProviderOptions(provider.type);
+      // Observable: surfaced in logs so users can verify cache is wired up
+      try { console.log(`[prompt-cache] session=${this.sessionId} provider=${provider.type} note="${cacheReport.note}"`); } catch { /* ignore */ }
+
       // ===== streamText =====
       const result = streamText({
         model,
@@ -715,6 +722,7 @@ export class ChatRunner {
         tools,
         stopWhen: stepCountIs(20),
         abortSignal: abortController.signal,
+        ...(providerOptions ? { providerOptions } : {}),
       });
 
       try {

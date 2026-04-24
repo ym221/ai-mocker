@@ -158,6 +158,70 @@
 - 回归套件 430+ passed; M30 更新为 14 工具;D04 加 onConflict='reject' 保持原语义;M25/M32 加 waitMaxSec=300 对齐 5min LLM 预算
 - 详见 `CURSOR.md` 对应章节
 
+### Step-Fix-1: MCP 真实 LLM E2E 修复 ✅
+**起因**：2026-04-24 用户 MCP 实测"仓储管理"生成,暴露 4 类问题:
+- 首次 create session 160s 只 set_module_intent 就 done (零 write)
+- 第二次 create 走通但 health=degraded (缺 api-doc.md)
+- 15 个 endpoint 全 500 (ctrl.create is not a function)
+- manage_data update 报 no such column: updated_at
+
+**Step-Fix-1.1** — mock-router 支持 `endpoint.controller` 具名调度 + 单实体 fallback
+- AI 已能按"listWarehouses/getItemById/createInventory" 命名多实体 handler,router 优先读 `.controller` 字段,未设置才退回 `ctrl.list/getById/create/update/remove`
+- 签名: `ctrl[controller]({ body, query, params })`  req-like 一个对象
+- +9 测试 NC01~09 覆盖 4 种命名 / 多实体消歧 / 错误回显 / legacy
+
+**Step-Fix-1.2** — `getEntities()` + `pickEntityForEndpoint()` 统一实体源
+- AI 历史产物混用 `entity` 顶层 + `entities[]` 数组,框架 8 处只读 entities 导致遗漏
+- `getEntities(meta)` 把 legacy entity 预置进列表,同名时 entities[] 保留
+- `pickEntityForEndpoint(ep, list)` 按 ep.entity → controller 启发式 → path 片段 → 兜底,让 openapi-export 给每个 endpoint 选正确 `$ref`
+- 8 处切到 helper (base-model.ts / openapi-export.ts / module-health.ts / manage-data.ts / run-test.ts / delete-module.ts / update-diff.ts / generate-handoff-report.ts)
+- +15 单元 ME01~15 + pickEntityForEndpoint 四级优先级覆盖
+
+**Step-Fix-1.3** — chat-runner watchdog + auto-nudge (根治空 done)
+- 流自然结束若 `moduleIntent ∈ {create,update,edit}` 且本轮零 write_file/write_files → 注入 system-injected user nudge 让模型回正轨,最多 `CHAT_NUDGE_MAX`(默认 2) 次
+- 仍空 → `finalize('error', {message: '模型声明意图但连续 N 轮未写,建议换模型'})`,永不静默 done
+- `src/server/agent/watchdog.ts` 纯函数 decideWatchdog + buildNudgeMessage; chat-runner 抽 `consumeOneStream(messages)` 闭包循环调用
+- +12 WD01~12 覆盖全部决策 + nudge 预算边界
+
+**Step-Fix-1.4** — system-prompt 契约硬规则补齐
+- 开工流程段逐项列出 5 必需文件 (_meta.json / schema.sql / controller.ts / test.ts / api-doc.md) "少一个即失败"
+- schema.sql 必含 `created_at/updated_at TEXT DEFAULT CURRENT_TIMESTAMP` (BaseModel.update 自动写)
+- _meta.json 禁用顶层 entity 字段,所有实体走 entities[]
+- 多实体 controller 命名规则 + 内联 2 行样例 + 签名说明
+- 压缩既有冗余 (禁止动作 / 对账表 / 响应写法)  净增 ~350 bytes, 空 prompt 7727 → 8080 (SP07 阈值 8000→8500)
+- +SP08~11 (5 文件 / 时间戳 / entities / 多实体命名) 共 4 条
+
+**Step-Fix-1.5** — set_module_intent description 收紧
+- 明说 "此工具只声明意图,调用后必须紧接 write_files/write_file 写 5 文件"
+- 与 F1.3 watchdog 两端夹击"声明但不动手"
+
+**Step-Fix-1.6** — BaseModel outward 别名 + mock-router await + withMeta 宽容匹配 + watchdog 认 'edit'
+- BaseModel 加 `list/getById/remove` 别名 (inward 只有 findAll/findById/delete); 接受 string ID
+- mock-router 的 statusCode/`__mock__` 处理对 Promise 不生效: async controller 返 Promise → `'statusCode' in p` false → 走默认 200 分支。修: await 结果再处理
+- withMeta 严格 tableName 匹配失败回落 entities[0] 导致 wrong entity: 改宽容匹配 tableName / mock__+name / entity.name
+- watchdog 也认 operation='edit' (MCP update_module 流程里 AI 调 set_module_intent(operation:'edit'))
+- +3 BA01~03 测试
+
+### F3.1 真实 LLM E2E 硬验收 — 13 步全绿 ✅
+- create warehouse (3 entities 15 endpoints)  health=healthy 0 missingFiles
+- HTTP CRUD /warehouses /items /inventory 全 200
+- manage_data insert/update/list 3 实体全通
+- run_test: 5/5 passed
+- update_module add phone: diff +field Warehouse.phone + +test "仓库 phone CRUD"  hasChange=true
+- run_test after update: 6/6 passed
+- access log 最近 50 条全 200 (vs 修复前 18/18 全 500)
+- handoff_report 2086 bytes,3 实体 + phone 全部覆盖
+
+### 新增测试
+- tests/mock-router-named-controller.spec.ts (9)
+- tests/meta-entities.spec.ts (15)
+- tests/chat-runner-watchdog.spec.ts (12)
+- tests/base-model-aliases.spec.ts (3)
+- SP08~11 追加到 system-prompt.spec.ts (4)
+
+### 已知副作用
+- run_test cleanup 在后端进程内存边缘条件下偶尔失败一次,连续调用通常第 2 次 6/6 绿; 非本轮新引入
+
 ## 关键决策记录
 - Vite 6 而非 8（Node 20.16.0 兼容性）
 - Tailwind 3 而非 4（同上）

@@ -1,8 +1,12 @@
 # MockForge 执行游标
 
 ## 当前位置
-- **Phase**: ALL COMPLETE
-- **状态**: Step-Perf-2 完成(修复 Step-Perf-1 在小模型上的 bug — 恢复 write_file、default waitMaxSec 60→180s、stepCountIs 20→40、真实 LLM E2E 验收门槛)
+- **Phase**: ALL COMPLETE (Step-Fix-1 完成)
+- **状态**: Step-Fix-1 完成 — MCP 真实 LLM E2E 13 步全绿 (含 3 实体模块 warehouse 从 create → CRUD → update add phone → re-test 全流程)
+
+## 下一步
+- F3.1 E2E 发现的 run_test cleanup 偶发"首次失败第二次通过"(4 rows 残留) 可作为 Step-Fix-2 研究,非阻塞
+- 用户若再用 MCP 实测遇到新 bug,按 F1~F2 的分层修复思路扩展
 
 ## 已完成 Step
 - [x] Step 1: 项目初始化 (d759059)
@@ -34,7 +38,8 @@
 - [x] **Step-MCP-4**: 元数据约束建模 + OpenAPI 映射 + 强 diff — _meta.json 字段约束 (enum/min/max/pattern/unique) + entity.constraints 跨字段规则 + openapi-export 全面映射 + BaseModel.withMeta() auto-validate + diff_with_openapi constraint-violation/cross-field-violation + update_module 富 diff
 - [x] **Step-MCP-5**: 单模块单流程 + 自动续接 + 并发约束 — runHeadlessSession 拆分 start+attach、write 工具 waitMaxSec + onConflict=resume、新增 get_session_status + cancel_session(12→14 工具)、concurrency gate(per-user 3 / global 10)、30s heartbeat keepalive、统一错误码 + hint
 - [x] **Step-Perf-1**: AI 生成提速 + 工具表面简化 + UX 打磨 — system prompt 18KB→7KB(模板外置 get_module_template)、batch write_files 替代 write_file 单文件(6 次 LLM→1 次)、provider-aware prompt caching(Anthropic + OpenAI-compat 前缀稳定)、per-session mutex + 并行读、14→12 MCP 工具(inspect_module 合并 doc+openapi+health)、write-tool-runner 抽象消除 update/create 70% 同构、module-repo 集中 DB+fs 查询、error recovery_steps(machine-actionable 下一步工具)、humanized stage + expectedRemainingSec + suggestedNextAction
-- [x] **Step-Perf-2**: 真实 LLM 实测暴露的 Bug 修复 + 测试覆盖补齐 — 恢复 write_file 单文件工具(弱模型退回路径)、write_files 空 args 返更明确错误并引导退回、default waitMaxSec 60→180s(对齐真实 LLM 延迟)、stepCountIs 20→40(给真实生成足够步数)、新增 `tests/real-llm-e2e.spec.ts` 真实 gemma 端到端 E2E(RLM-01~04 作为硬验收门槛,以后不依赖用户手测)
+- [x] **Step-Perf-2**: 真实 LLM 实测暴露的 Bug 修复 + 测试覆盖补齐
+- [x] **Step-Fix-1**: MCP 真实 LLM E2E 修复(6 Task) — mock-router named-controller 调度 + getEntities helper 统一实体源 + chat-runner watchdog+nudge 根治空 done + system-prompt 契约硬规则 + BaseModel outward 别名 + await async controller。F3.1 13 步真实 LLM E2E 全绿(3 实体 warehouse: create/CRUD/update add phone/6 tests 全通过 + access log 0×500) — 恢复 write_file 单文件工具(弱模型退回路径)、write_files 空 args 返更明确错误并引导退回、default waitMaxSec 60→180s(对齐真实 LLM 延迟)、stepCountIs 20→40(给真实生成足够步数)、新增 `tests/real-llm-e2e.spec.ts` 真实 gemma 端到端 E2E(RLM-01~04 作为硬验收门槛,以后不依赖用户手测)
 
 ## Step-Chat-Resumable 变更摘要
 计划文档: `plans/STEP-CHAT-RESUMABLE-PLAN.md`

@@ -7,9 +7,16 @@ import { manageData } from './tools/manage-data.js';
 import { listModules } from './tools/list-modules.js';
 import { deleteModule } from './tools/delete-module.js';
 import { fetchModuleTemplate } from './tools/get-module-template.js';
+import { runSerialized } from './lib/session-mutex.js';
 import type { ChatRunner } from './chat-runner.js';
 
 export function buildTools(userId: number, runner?: ChatRunner) {
+  /** Serialize write-side tool bodies per-session. Reads stay parallel. */
+  const serialize = <T>(fn: () => Promise<T>): Promise<T> => {
+    if (!runner) return fn();
+    return runSerialized(runner.sessionId, fn);
+  };
+
   return {
     set_module_intent: tool({
       description: '【必须在开始生成前调用】声明本次要创建或修改的模块。后端会对照数据库纠偏并更新模块状态。',
@@ -33,9 +40,7 @@ export function buildTools(userId: number, runner?: ChatRunner) {
           content: z.string().describe('File content'),
         })).min(1).describe('Files to write. Keep ordering meaningful: schema.sql should come before _meta.json if you want the SQL reconciliation to inform the meta sync.'),
       }),
-      execute: async ({ files }) => {
-        return writeFiles(userId, { files });
-      },
+      execute: async ({ files }) => serialize(() => writeFiles(userId, { files })),
     }),
 
     read_file: tool({
@@ -53,9 +58,7 @@ export function buildTools(userId: number, runner?: ChatRunner) {
       parameters: z.object({
         moduleName: z.string().describe('Module name to test'),
       }),
-      execute: async ({ moduleName }) => {
-        return runTest(userId, moduleName);
-      },
+      execute: async ({ moduleName }) => serialize(() => runTest(userId, moduleName)),
     }),
 
     manage_data: tool({
@@ -68,9 +71,8 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         id: z.number().optional().describe('Record ID (for delete)'),
         entityName: z.string().optional().describe('Entity name (defaults to first entity in _meta.json)'),
       }),
-      execute: async ({ action, moduleName, data, count, id, entityName }) => {
-        return manageData(userId, action, moduleName, data, { count, id, entityName });
-      },
+      execute: async ({ action, moduleName, data, count, id, entityName }) =>
+        serialize(() => manageData(userId, action, moduleName, data, { count, id, entityName })),
     }),
 
     list_modules: tool({
@@ -86,9 +88,7 @@ export function buildTools(userId: number, runner?: ChatRunner) {
       parameters: z.object({
         moduleName: z.string().describe('Module name to delete'),
       }),
-      execute: async ({ moduleName }) => {
-        return deleteModule(userId, moduleName);
-      },
+      execute: async ({ moduleName }) => serialize(() => deleteModule(userId, moduleName)),
     }),
 
     get_module_template: tool({

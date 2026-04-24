@@ -2,7 +2,7 @@
 
 ## 当前位置
 - **Phase**: ALL COMPLETE
-- **状态**: Step-MCP-4 完成（_meta.json 约束建模 + OpenAPI 映射 + BaseModel auto-validate + diff 富化）
+- **状态**: Step-MCP-5 完成（waitMaxSec + onConflict=resume 单模块单流程 + 自动续接 + 并发 gate + 30s heartbeat + 统一错误码）
 
 ## 已完成 Step
 - [x] Step 1: 项目初始化 (d759059)
@@ -32,6 +32,7 @@
 - [x] **Step-MCP-2**: MCP 写能力 + 业务侧感知 + 交接报告 — 12 个 MCP 工具全集 + access log + progress notifications + 软 warnings + dry_run + handoff report + headless-session 桥接
 - [x] **Step-MCP-3**: Mock 保真度 + 规范契约 + 选择器入口 — mock-router 放权 + system-prompt 规范决策硬规则 + MCP provider/model/preset 覆盖 + Web UI 新建对话 dialog + 对话中 meta-bar 切换
 - [x] **Step-MCP-4**: 元数据约束建模 + OpenAPI 映射 + 强 diff — _meta.json 字段约束 (enum/min/max/pattern/unique) + entity.constraints 跨字段规则 + openapi-export 全面映射 + BaseModel.withMeta() auto-validate + diff_with_openapi constraint-violation/cross-field-violation + update_module 富 diff
+- [x] **Step-MCP-5**: 单模块单流程 + 自动续接 + 并发约束 — runHeadlessSession 拆分 start+attach、write 工具 waitMaxSec + onConflict=resume、新增 get_session_status + cancel_session(12→14 工具)、concurrency gate(per-user 3 / global 10)、30s heartbeat keepalive、统一错误码 + hint
 
 ## Step-Chat-Resumable 变更摘要
 计划文档: `plans/STEP-CHAT-RESUMABLE-PLAN.md`
@@ -382,5 +383,42 @@
 - 关键回归: api-data(13) + mcp-server-v2 ex-M25/M32(25) + mcp-warehouse-e2e(6) + manage-data-resolve(2) + mock-router-response(8) + step-ux-polish-5(8) = 62 + UI 完整批 (page-chat:23, chat-resumable, page-modules, page-data-management, navigation, e2e-flows = 86) = **148 passed**
 - 已知 flaky(不阻塞):M25/M32 真实 LLM 测试沿用 Playwright retries 策略
 
+## Step-MCP-5 变更摘要
+目标:把 MCP 写工具的长任务体验做成"重发即续接" — AI 调 `update_module` 不再因客户端 timeout 而断链;断线后再发同样请求自动 attach 到在跑的 session,语义跟普通调用一样。
+
+### 起因(用户实测痛点)
+用户用 Cursor AI Agent 跑 `update_module warehouse`,5-10 min 长任务期间 Cursor 侧报 `Not connected`,需要 Reload Window 才能恢复。Step-MCP-3 的 in-flight-lock 解决了"不会重复创建 session"但 AI 续接体验仍差 — server 只会返 already-processing,AI 必须主动调专门工具才能拿到结果。
+
+### 核心改动
+- **headless-session 拆分**(`src/server/mcp/lib/headless-session.ts`):`runHeadlessSession` → `startHeadlessSession()` + `attachAndWait(sessionId, waitMaxSec)` 两相;legacy `runHeadlessSession` 保留为 start+attach 无限等的门面;新增 `getSessionSnapshot()` 给 get_session_status 工具用
+- **写工具 waitMaxSec + onConflict**(`update-module.ts` + `create-module-from-spec.ts`):`waitMaxSec`(默认 60,上限 300);`onConflict: 'resume' | 'reject' | 'replace'`(默认 `'resume'`);attach-on-resume 返 `attached:true` + `actualInstruction` + `yourInstruction` + 不一致时 `warning`
+- **2 个新会话工具**(`get-session-status.ts`, `cancel-session.ts`):5ms 快照 + 主动放弃;工具数 12 → 14
+- **并发 gate**(`concurrency-gate.ts`):per-user 3 + 全局 10,env 可调(`MCP_USER_CONCURRENCY_LIMIT` / `MCP_GLOBAL_CONCURRENCY_LIMIT`);attach 不计数(重发不会触发 BUSY);BUSY 响应列出 `runningSessions`
+- **heartbeat**(`chat-runner.ts`):每 `CHAT_HEARTBEAT_MS`(默认 30000)强发一条 `heartbeat` 事件,持久化到 message_events + 通过 progress notification 透传给 client → transport 不会 idle 断;前端 switch 未 handle 类型自动忽略
+- **统一错误码**(`error-codes.ts`):所有 MCP 工具 `isError` 响应带 `code` + `hint` + 场景特定字段
+- **instruction 比对辅助**(`instruction-utils.ts`):normalize(trim + 折空白 + 大小写) 决定是否 emit drift warning;永不阻断
+- **guide + 工具 description 全面更新**:加"⚡ 单模块单流程 + 自动续接"章节,写工具 description 含 waitMaxSec/onConflict,会话工具 description 互相 cross-link
+
+### 测试
+- `tests/headless-attach.spec.ts` — HA01-HA05 start/attach 两相 + legacy 门面(5)
+- `tests/mcp-attach-resume.spec.ts` — AR01-AR08 attach-on-resend + onConflict + drift warning + normalize(8)
+- `tests/mcp-session-tools.spec.ts` — ST01-ST06 get_session_status + cancel_session(6)
+- `tests/mcp-concurrency.spec.ts` — CC01-CC05 concurrency gate 单元(5)
+- `tests/mcp-heartbeat.spec.ts` — HB01-HB02 heartbeat 事件持久化 + payload 结构(2)
+- `tests/mcp-error-codes.spec.ts` — EC01-EC04 统一错误码 + hint(4)
+- `tests/mcp-guide-resume.spec.ts` — GR01-GR03 guide + 工具 description(3)
+- `tests/mcp-resume-e2e.spec.ts` — E01-E03 端到端复刻用户场景 + BUSY 并发限制(3)
+
+### 测试结果
+- 新增测试: **36 全绿** (HA:5 + AR:8 + ST:6 + CC:5 + HB:2 + EC:4 + GR:3 + E:3)
+- 回归: M30 更新为 14 个工具列表;D04 加 onConflict='reject' 保持原语义;M25/M32 加 waitMaxSec=300 对齐 5min LLM 预算。完整套件 430+ passed
+- 已知 flaky(不阻塞):M25/M32 真实 LLM 测试沿用 Playwright retries 策略
+
+### 架构要点
+- **per-user 单模块单流程**依旧由 `findInFlightSession` + ChatRunner 注册表保证;Step-MCP-5 只是改"第二次调用"的默认响应
+- **attach-on-resume 不动 DB**:只是起一个新 subscribe(0) 订阅已有 runner 的 DB + live 事件,DB 里还是原 session
+- **gate 在 backend process 内存**:跨进程不共享(重启清零);release 通过后台 watcher `attachAndWait(sessionId, undefined)` 订阅 runner 的 close 事件实现
+- **heartbeat 每 30s 一条 → 24h × 2880 = 86.4K 条/session**:可接受(SQLite 批量写快);前端默认过滤不影响 UI
+
 ## 下一步
-Phase 6 已完成（MCP-1 + MCP-2 + MCP-3 + MCP-4）。若未来需要：细粒度权限 Key（只读/写分级）、stdio transport、sampling-based 生成优化，再开 Step-MCP-5。
+Phase 6 已完成（MCP-1 + MCP-2 + MCP-3 + MCP-4 + MCP-5）。若未来需要：细粒度权限 Key（只读/写分级）、stdio transport、sampling-based 生成优化、idempotency key、per-session Webhook。

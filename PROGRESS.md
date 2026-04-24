@@ -8,7 +8,7 @@
 | 3 | 前端 — 对话 | ✅ 完成 |
 | 4 | 前端 — 模块管理 | ✅ 完成 |
 | 5 | 增强 | ✅ 完成 |
-| 6 | MCP 集成 | ✅ 完成（Step-MCP-1 + Step-MCP-2 + Step-MCP-3 + Step-MCP-4）|
+| 6 | MCP 集成 | ✅ 完成（Step-MCP-1 + Step-MCP-2 + Step-MCP-3 + Step-MCP-4 + Step-MCP-5）|
 
 ## Phase 1：项目基础
 
@@ -111,6 +111,19 @@
 - **system-prompt 引导**:controller 模板改为 .withMeta() + try/catch ValidationError;新加"表达业务约束的优先级"段
 - 新增 67 条测试 (meta-schema:9 + openapi-constraints:7 + validator:16 + base-model-validate:8 + diff-with-openapi-constraints:6 + update-module-richdiff:14 + warehouse-constraints e2e:7)
 - 关键回归 148 passed (api-data 13, mcp-server-v2 ex-LLM 25, mcp-warehouse-e2e 6, manage-data-resolve 2, mock-router-response 8, step-ux-polish-5 8, page-chat 23 + chat-resumable + page-modules + page-data-management + navigation + e2e-flows ≈86)
+- 详见 `CURSOR.md` 对应章节
+
+### Step-MCP-5: 单模块单流程 + 自动续接 + 并发约束 ✅
+- **headless-session 拆分**(`mcp/lib/headless-session.ts`): `runHeadlessSession` → `startHeadlessSession()` + `attachAndWait(sessionId, waitMaxSec)` 两相; legacy 门面保留; 新增 `getSessionSnapshot()` DB-only 快照
+- **写工具 waitMaxSec + onConflict**(`create-module-from-spec.ts` / `update-module.ts`): 默认阻塞 60s (上限 300); 超时返 `status:'still-running'` + sessionId; onConflict=resume (默认) / reject / replace; attached=true 时携带 actualInstruction + yourInstruction + 不一致 warning
+- **2 个新会话工具**(`get-session-status.ts`, `cancel-session.ts`): 5ms 快照 + 主动放弃;工具数 12 → 14
+- **并发 gate**(`mcp/lib/concurrency-gate.ts`): per-user 3 + 全局 10 (env `MCP_USER_CONCURRENCY_LIMIT` / `MCP_GLOBAL_CONCURRENCY_LIMIT`); attach 不计数; BUSY 响应列出 runningSessions
+- **heartbeat**(`agent/chat-runner.ts`): 每 `CHAT_HEARTBEAT_MS` (默认 30000) 强发 heartbeat 事件, 持久化 + progress notification 透传防 idle 断连
+- **统一错误码**(`mcp/lib/error-codes.ts`): 所有 MCP 工具 isError 响应带 `code` + `hint` + 场景字段
+- **instruction 比对**(`mcp/lib/instruction-utils.ts`): normalize trim + 折空白 + 大小写; 不一致只 warning 不阻断
+- **guide + 工具 description 全面更新**: 加"⚡ 单模块单流程 + 自动续接"章节, 写工具 description 含 waitMaxSec/onConflict
+- 新增 36 条测试 (HA:5 + AR:8 + ST:6 + CC:5 + HB:2 + EC:4 + GR:3 + E:3)
+- 回归套件 430+ passed; M30 更新为 14 工具;D04 加 onConflict='reject' 保持原语义;M25/M32 加 waitMaxSec=300 对齐 5min LLM 预算
 - 详见 `CURSOR.md` 对应章节
 
 ## 关键决策记录

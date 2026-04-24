@@ -300,12 +300,13 @@ test.describe('MCP v2 — 轻量写工具', () => {
     await client.close();
   });
 
-  test('M30 tools/list 返回所有 12 个工具名', async () => {
+  test('M30 tools/list 返回所有 14 个工具名', async () => {
     const key = await generateApiKey();
     const client = await connect(key);
     const list = await client.listTools();
     const names = list.tools.map((t) => t.name).sort();
     expect(names).toEqual([
+      'cancel_session',
       'create_module_from_spec',
       'delete_module',
       'diff_with_openapi',
@@ -314,6 +315,7 @@ test.describe('MCP v2 — 轻量写工具', () => {
       'get_mock_access_log',
       'get_module_health',
       'get_openapi',
+      'get_session_status',
       'list_modules',
       'manage_data',
       'run_test',
@@ -409,6 +411,7 @@ test.describe('MCP v2 — 轻量写工具', () => {
       arguments: {
         moduleName: testName,
         spec: `请创建一个反馈管理模块，包含字段：content（反馈内容，文本必填）、rating（评分，1-5 整数必填）。端点需要支持列表、详情、创建、更新、删除。`,
+        waitMaxSec: 300,
       },
     }, undefined, { timeout: 300_000 });
 
@@ -447,6 +450,7 @@ test.describe('MCP v2 — 轻量写工具', () => {
       arguments: {
         moduleName: testName,
         instruction: '给 feedback 实体增加一个可选字段 tag（string 类型），不要改其他字段或端点。',
+        waitMaxSec: 300,
       },
     }, undefined, { timeout: 300_000 });
 

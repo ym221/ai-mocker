@@ -6,12 +6,15 @@
 
 ## 1. 背景
 
-MockForge 通过 Model Context Protocol（MCP）对外暴露**12 个工具 + 1 个使用指南资源**，让 IDE 里的 AI 助手能够：
+MockForge 通过 Model Context Protocol（MCP）对外暴露**14 个工具 + 1 个使用指南资源**，让 IDE 里的 AI 助手能够：
 
 - **读**：列模块、拿 API 文档 / OpenAPI、查 Mock 访问日志、诊断模块健康度
 - **写**：从规格生成模块、修改模块、跑测试、造数据、删模块
 - **诊断**：把实际请求与 OpenAPI 对比（diff）
+- **会话**：查询在跑 session 的状态、主动放弃（Step-MCP-5 新增）
 - **交接**：为后端团队生成 Markdown 交接报告
+
+写工具（`create_module_from_spec` / `update_module`）默认**阻塞最多 60s**；超时仍在跑就返 `still-running` + sessionId，调用方重发同参数即可 **attach-on-resend** 继续等——语义跟普通调用一样。详见 §14。
 
 MCP 服务与 Web UI **跑在同一进程**，共享同一份 SQLite。IDE AI 开的会话 **Web UI 能看见并接管**。
 
@@ -444,14 +447,112 @@ AI 在生成时遵循的硬规则:
 
 ---
 
-## 14. 路线图
+## 14. 单模块单流程 + 自动续接（Step-MCP-5）
+
+> 背景:AI Agent 跑 `update_module` 时,客户端 transport 常在 5-10min 的长任务里 timeout,旧方案需要用户重新开 IDE。Step-MCP-5 把这个体验改成**"重发即续接"** — AI 重新调 `update_module` 就自动 attach 到在跑的 session,语义跟普通调用一样。
+
+### 14.1 新参数:`waitMaxSec` + `onConflict`
+
+`create_module_from_spec` / `update_module` 新增两个参数:
+
+- **`waitMaxSec`** (默认 60,上限 300):本次调用最多阻塞多久。到期仍在跑 → 返 `{ status:"still-running", sessionId, stage, elapsedSec }`,runner 在后台继续跑。
+- **`onConflict`** (默认 `'resume'`):
+  - `'resume'` — 有 in-flight 就 attach 上去(默认行为,95% 场景最舒服)
+  - `'reject'` — 有 in-flight 就返 `MOCKFORGE_ALREADY_PROCESSING`
+  - `'replace'` — 有 in-flight 就 cancel 旧的 + 启新
+
+### 14.2 典型流程
+
+```text
+// 新建 / 修改模块 — 一行调用即完成 (or 续接)
+r = update_module({ moduleName: 'warehouse', instruction: '...' })
+
+if (r.status === 'updated') {
+  // 成功,拿 diff / endpoints
+} else if (r.status === 'still-running') {
+  // 没完,直接再调一次同样的 — server 自动 attach 到同一 session
+  r = update_module({ moduleName: 'warehouse', instruction: '...' })
+}
+```
+
+### 14.3 客户端 timeout 的行为
+
+AI(IDE client)的 HTTP transport 断了不影响 server 端。重发同参数 `update_module`:
+- Server 检测到 in-flight session
+- 默认 attach,返回 `{ attached: true, sessionId, status }`
+- 持续直到拿到 `status:"updated"`
+
+### 14.4 不同 instruction 重发的警告
+
+默认 `'resume'` 下,对同一 moduleName 发不同 instruction 仍会 attach 到旧 session:
+
+```jsonc
+{
+  "attached": true,
+  "actualInstruction": "add a location field",   // 原始 instruction
+  "yourInstruction":   "add a status field",     // 本次 instruction
+  "warning": "Note: your instruction differs from what's actually executing..."
+}
+```
+
+Normalize 后比较(trim + 折空白 + 大小写无关);不一致就 warning,**永远不阻断**。如果要"我改主意,一步到位",传 `onConflict: 'replace'` cancel 旧的启新。
+
+### 14.5 会话工具 `get_session_status` + `cancel_session`
+
+```jsonc
+// 非阻塞 5ms 快照(不 attach)
+get_session_status({ sessionId })
+→ {
+    status: 'running' | 'done' | 'error' | 'paused' | 'aborted',
+    stage: 'writing controller.ts',
+    elapsedSec: 145,
+    lastEventSeq: 87,
+    recentEvents: [...]
+  }
+
+// 主动放弃
+cancel_session({ sessionId })
+→ { status: 'aborted', wasLive: true, elapsedBeforeCancel: 145 }
+```
+
+### 14.6 并发限制
+
+为避免 AI 误重试爆炸:
+- **per-user**:3(环境变量 `MCP_USER_CONCURRENCY_LIMIT`)
+- **全局**:10(环境变量 `MCP_GLOBAL_CONCURRENCY_LIMIT`)
+- 超限返 `MOCKFORGE_BUSY`,响应里 `runningSessions` 列出在跑的 session 让 AI 自己决定
+- **attach 不计数**(重发不会触发 BUSY)
+
+### 14.7 心跳 keepalive
+
+ChatRunner 启动后每 `CHAT_HEARTBEAT_MS` 毫秒(默认 30000,0 禁用)强发一条 `heartbeat` 事件,通过 MCP progress notification 透传给 client。主流 IDE client transport tolerate 60s idle,30s 留 50% 余量,保证长任务不会因 idle 断连。
+
+### 14.8 统一错误码
+
+所有工具的 `isError` 响应 `structuredContent` 现在都带 `code` + `hint`:
+
+| Code | 场景 | Hint 举例 |
+|------|------|----------|
+| `MOCKFORGE_BUSY` | 并发超限 | 看 runningSessions,等 或 cancel_session |
+| `MOCKFORGE_ALREADY_PROCESSING` | onConflict=reject 且有 in-flight | 改为 resume / replace |
+| `MOCKFORGE_MODULE_NOT_FOUND` | moduleName 错 | list_modules 看清单 |
+| `MOCKFORGE_SESSION_NOT_FOUND` | sessionId 错 | 检查 Key / sessionId |
+| `MOCKFORGE_NO_PROVIDER` | server 没配 provider | Settings → Providers 配置 |
+| `MOCKFORGE_VALIDATION_FAILED` | 参数 / 校验失败 | get_openapi 看契约 |
+| `MOCKFORGE_WAIT_TIMEOUT` | 写工具非 done 终态 | 查 session,重试 |
+| `MOCKFORGE_INTERNAL_ERROR` | server 内部错 | 查日志 |
+
+---
+
+## 15. 路线图
 
 | 版本 | 状态 | 能力 |
 |------|------|------|
 | Step-MCP-1 | ✅ | 只读工具 + API Key + guide |
 | Step-MCP-2 | ✅ | 写工具 + 业务侧感知 + 交接报告 + progress notifications + 软 warnings + dry_run |
 | Step-MCP-3 | ✅ | mock-router 放权 + 规范决策硬规则 + provider/model/preset 覆盖 + Web UI 选择器 |
-| Step-MCP-4 | ✅(当前) | _meta.json 约束建模 + OpenAPI 映射 + BaseModel auto-validate + diff 富化 |
-| 未来 | — | 细粒度 Key 权限(read-only / write)、stdio transport、sampling 优化生成 |
+| Step-MCP-4 | ✅ | _meta.json 约束建模 + OpenAPI 映射 + BaseModel auto-validate + diff 富化 |
+| Step-MCP-5 | ✅(当前) | 单模块单流程 + 自动续接 (waitMaxSec + onConflict=resume) + 并发 gate + heartbeat + 统一错误码 |
+| 未来 | — | 细粒度 Key 权限(read-only / write)、stdio transport、sampling 优化生成、idempotency key |
 
-更详细的设计和决策记录见 [`ANALYSIS-AI-DEV-WORKFLOW.md`](../ANALYSIS-AI-DEV-WORKFLOW.md) 和 `CURSOR.md` 的 Step-MCP-{1,2,3,4} 章节。
+更详细的设计和决策记录见 [`ANALYSIS-AI-DEV-WORKFLOW.md`](../ANALYSIS-AI-DEV-WORKFLOW.md) 和 `CURSOR.md` 的 Step-MCP-{1,2,3,4,5} 章节。

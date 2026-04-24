@@ -127,7 +127,7 @@ test.describe('MCP in-flight 并发去重', () => {
       const fastSpec = '__fake_slow__ this is a fake-slow generation marker';
       const p1 = c1.callTool({
         name: 'create_module_from_spec',
-        arguments: { moduleName: MODULE, spec: fastSpec },
+        arguments: { moduleName: MODULE, spec: fastSpec, waitMaxSec: 1 },
       }, undefined, { timeout: 60000 });
 
       // 等 server 端的 ChatRunner 进入 running(轮询 sessions 表)
@@ -139,23 +139,30 @@ test.describe('MCP in-flight 并发去重', () => {
       }
       expect(countRunningSessionsFor(1, MODULE)).toBe(1);
 
-      // 第二次调用: 应立即被 dedupe(无需等 LLM,几毫秒返回)
+      // 第二次调用: onConflict='reject' 触发 dedupe(Step-MCP-5 起默认为 resume)
       const r2 = await c2.callTool({
         name: 'create_module_from_spec',
-        arguments: { moduleName: MODULE, spec: '无所谓 - 应被 dedupe' },
+        arguments: { moduleName: MODULE, spec: '无所谓 - 应被 dedupe', onConflict: 'reject' },
       }, undefined, { timeout: 5000 });
 
       expect((r2 as any).isError).toBe(true);
-      const sc = (r2 as any).structuredContent as { status: string; existingSessionId?: string };
-      expect(sc.status).toBe('already-processing');
+      const sc = (r2 as any).structuredContent as { code?: string; existingSessionId?: string };
+      expect(sc.code).toBe('MOCKFORGE_ALREADY_PROCESSING');
       expect(sc.existingSessionId).toBeTruthy();
-      expect((r2 as any).content?.[0]?.text).toContain('already being created');
+      expect((r2 as any).content?.[0]?.text).toContain('already being');
 
       // dedupe 期间运行的 session 仍是 1(不是 2)
       expect(countRunningSessionsFor(1, MODULE)).toBe(1);
 
-      // 等第一个跑完
+      // 等第一个跑完 (since waitMaxSec=1, p1 resolves quickly with still-running;
+      // the backend runner keeps going — poll until it terminates naturally)
       await p1;
+      let waited2 = 0;
+      while (waited2 < 30_000) {
+        if (countRunningSessionsFor(1, MODULE) === 0) break;
+        await new Promise(r => setTimeout(r, 500));
+        waited2 += 500;
+      }
     } finally {
       await c1.close();
       await c2.close();

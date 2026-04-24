@@ -63,7 +63,29 @@ test.beforeAll(async () => {
 test.describe('Task 5.2 — write tools attach-on-resend', () => {
   const MODULE = 'attach_resume_test_mod';
 
-  test.afterEach(() => forceTerminalAll(MODULE));
+  // Actively cancel any running sessions between tests so the backend's
+  // concurrency gate releases slots before the next test runs.
+  test.afterEach(async () => {
+    const db = new Database(DB_PATH);
+    let running: Array<{ id: string }> = [];
+    try {
+      running = db.prepare(
+        `SELECT id FROM sessions WHERE user_id = 1 AND run_status = 'running'`,
+      ).all() as Array<{ id: string }>;
+    } finally { db.close(); }
+    if (running.length > 0) {
+      const key = await generateApiKey();
+      const c = await connect(key);
+      try {
+        for (const s of running) {
+          try {
+            await c.callTool({ name: 'cancel_session', arguments: { sessionId: s.id } }, undefined, { timeout: 20000 });
+          } catch { /* ignore */ }
+        }
+      } finally { await c.close(); }
+    }
+    forceTerminalAll(MODULE);
+  });
 
   test('AR01 默认 attach (instruction 一致) + 无 warning', async () => {
     test.setTimeout(120_000);

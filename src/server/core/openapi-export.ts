@@ -1,6 +1,14 @@
 import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
-import { normalizeMeta, type ModuleMeta, type MetaField, type EntityConstraint } from './meta-schema.js';
+import {
+  normalizeMeta,
+  getEntities,
+  pickEntityForEndpoint,
+  type ModuleMeta,
+  type MetaField,
+  type MetaEntity,
+  type EntityConstraint,
+} from './meta-schema.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -82,9 +90,10 @@ export function buildOpenApi(userId: number, moduleName: string): Record<string,
     components: { schemas: {} },
   };
 
-  const firstEntityName = meta.entities?.[0]?.name;
-  const firstEntity = meta.entities?.[0];
-  for (const ent of meta.entities || []) {
+  const entities = getEntities(meta);
+  const firstEntity = entities[0];
+  const firstEntityName = firstEntity?.name;
+  for (const ent of entities) {
     // ===== Full schema: includes id + all fields + created_at / updated_at =====
     // Used for response bodies and POST (create) request bodies.
     const properties: Record<string, any> = {
@@ -116,8 +125,6 @@ export function buildOpenApi(userId: number, moduleName: string): Record<string,
     };
   }
 
-  const firstRef = firstEntityName ? `#/components/schemas/${firstEntityName}` : undefined;
-  const firstPatchRef = firstEntityName ? `#/components/schemas/${firstEntityName}Patch` : undefined;
   const basePath = meta.basePath || '';
 
   const successEnvelope = (dataSchema: any) => ({
@@ -129,13 +136,21 @@ export function buildOpenApi(userId: number, moduleName: string): Record<string,
     },
   });
 
-  // Cross-field constraints surface as markdown appended to write-endpoint
-  // descriptions (POST/PUT/PATCH). diff_with_openapi reads the same constraints
-  // from _meta.json directly, so this description block is purely for human /
-  // OpenAPI consumers.
-  const constraintsMd = constraintsToMarkdown(firstEntity?.constraints || []);
+  // Per-entity cross-field constraints surface as markdown appended to
+  // write-endpoint descriptions (POST/PUT/PATCH). diff_with_openapi reads
+  // constraints directly from _meta.json, so the description block is for
+  // human / OpenAPI consumers.
+  const constraintsMdByEntity = new Map<string, string>();
+  for (const e of entities) {
+    constraintsMdByEntity.set(e.name, constraintsToMarkdown(e.constraints || []));
+  }
 
   for (const ep of meta.endpoints || []) {
+    const targetEntity: MetaEntity | null = pickEntityForEndpoint(ep, entities);
+    const entityName = targetEntity?.name || firstEntityName;
+    const entityRef = entityName ? `#/components/schemas/${entityName}` : undefined;
+    const patchRef = entityName ? `#/components/schemas/${entityName}Patch` : undefined;
+    const constraintsMd = targetEntity ? (constraintsMdByEntity.get(targetEntity.name) || '') : '';
     const fullPath = (basePath + (ep.path || '')).replace(/\/:([A-Za-z0-9_]+)/g, '/{$1}');
     const method = String(ep.method || 'GET').toLowerCase();
     const isWrite = method === 'post' || method === 'put' || method === 'patch';
@@ -164,24 +179,24 @@ export function buildOpenApi(userId: number, moduleName: string): Record<string,
     // PUT / PATCH = partial update: Patch schema (all fields optional) to
     // match BaseModel.update() semantics. This prevents diff_with_openapi
     // from flagging spec-correct partial updates as "missing required field".
-    if (method === 'post' && firstRef) {
+    if (method === 'post' && entityRef) {
       op.requestBody = {
         required: true,
-        content: { 'application/json': { schema: { $ref: firstRef } } },
+        content: { 'application/json': { schema: { $ref: entityRef } } },
       };
-    } else if ((method === 'put' || method === 'patch') && firstPatchRef) {
+    } else if ((method === 'put' || method === 'patch') && patchRef) {
       op.requestBody = {
         required: true,
-        content: { 'application/json': { schema: { $ref: firstPatchRef } } },
+        content: { 'application/json': { schema: { $ref: patchRef } } },
       };
     }
 
-    let dataSchema: any = firstRef ? { $ref: firstRef } : { type: 'object' };
+    let dataSchema: any = entityRef ? { $ref: entityRef } : { type: 'object' };
     if (ep.type === 'list') {
       dataSchema = {
         type: 'object',
         properties: {
-          list: { type: 'array', items: firstRef ? { $ref: firstRef } : { type: 'object' } },
+          list: { type: 'array', items: entityRef ? { $ref: entityRef } : { type: 'object' } },
           total: { type: 'integer' },
           page: { type: 'integer' },
           pageSize: { type: 'integer' },

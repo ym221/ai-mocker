@@ -12,6 +12,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { resolve, join } from 'path';
 import { sqlite } from './database.js';
+import { getPrimaryEntity } from './meta-schema.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -37,12 +38,12 @@ export function computeModuleHealth(userId: number, moduleName: string): HealthR
   if (existsSync(metaPath)) {
     try {
       const meta = JSON.parse(readFileSync(metaPath, 'utf-8'));
+      const primary = getPrimaryEntity(meta);
       metaValid = typeof meta.name === 'string'
-        && Array.isArray(meta.entities)
-        && meta.entities.length > 0
-        && typeof meta.entities[0]?.tableName === 'string';
-      if (metaValid) {
-        tableName = meta.entities[0].tableName as string;
+        && primary != null
+        && typeof primary.tableName === 'string';
+      if (metaValid && primary) {
+        tableName = primary.tableName as string;
       }
     } catch { /* metaValid stays false */ }
   }

@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'async_hooks';
 import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { sqlite } from './database.js';
-import { normalizeMeta, type MetaEntity } from './meta-schema.js';
+import { normalizeMeta, getEntities, type MetaEntity } from './meta-schema.js';
 import { validate, ValidationError } from './validator.js';
 
 export { ValidationError } from './validator.js';
@@ -79,7 +79,7 @@ export class BaseModel {
     if (!existsSync(metaPath)) return this;
     try {
       const meta = normalizeMeta(JSON.parse(readFileSync(metaPath, 'utf-8')));
-      const entities = meta.entities || [];
+      const entities = getEntities(meta);
       const matched = entities.find(e => e.tableName === this.baseTableName) || entities[0];
       if (matched) this.boundEntity = matched;
     } catch { /* malformed meta — silently skip validation */ }

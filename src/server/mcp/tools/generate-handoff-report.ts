@@ -5,6 +5,7 @@ import { db, sqlite } from '../../core/database.js';
 import { modules } from '../../core/schema.js';
 import { computeModuleHealth } from '../../core/module-health.js';
 import { readModuleMeta, summarizeEndpoints } from '../../core/openapi-export.js';
+import { getEntities } from '../../core/meta-schema.js';
 import { getMcpUserId } from '../context.js';
 import { MCP_ERROR_CODES, mcpError } from '../lib/error-codes.js';
 
@@ -94,9 +95,10 @@ export function registerGenerateHandoffReportTool(server: McpServer): void {
       lines.push('');
 
       // 实体
-      if (meta?.entities?.length) {
+      const allEntities = getEntities(meta);
+      if (allEntities.length) {
         lines.push('### 实体与字段');
-        for (const ent of meta.entities) {
+        for (const ent of allEntities) {
           lines.push(`**${ent.name}**:`);
           lines.push('| 字段 | 类型 | 必填 |');
           lines.push('|------|------|------|');

@@ -71,6 +71,8 @@ export interface MetaEndpoint {
   method?: string;
   path?: string;
   handler?: string;
+  /** Step-Fix-1.1: explicit handler name for multi-entity dispatch. */
+  controller?: string;
 }
 
 export interface ModuleMeta {
@@ -80,7 +82,16 @@ export interface ModuleMeta {
   version?: number | string;
   basePath?: string;
   status?: string;
+  /**
+   * Canonical entity list. New code SHOULD read via `getEntities(meta)` which also
+   * folds in legacy top-level `entity` (single-entity historical schema).
+   */
   entities?: MetaEntity[];
+  /**
+   * Legacy: some AI outputs put the primary entity here and additional ones in
+   * `entities[]`. `getEntities()` merges both. Do NOT emit this field in new code.
+   */
+  entity?: MetaEntity;
   endpoints?: MetaEndpoint[];
   config?: Record<string, unknown>;
 }
@@ -113,4 +124,89 @@ export function normalizeMeta(m: ModuleMeta): ModuleMeta {
     ...m,
     entities: (m.entities || []).map(normalizeEntity),
   };
+}
+
+/**
+ * Canonical read for the entity list.
+ *
+ * Folds the legacy top-level `entity` field into the list so downstream code
+ * (openapi-export, manage_data, module-health, run-test, delete-module,
+ * update-diff, handoff-report, BaseModel) no longer needs to know about the
+ * split. The legacy entity is prepended as primary when present and not a dup.
+ *
+ * Normalizes every entity (enumValues → enum, defaultValue → default).
+ */
+export function getEntities(meta: ModuleMeta | null | undefined): MetaEntity[] {
+  if (!meta) return [];
+  const out = (meta.entities || []).map(normalizeEntity);
+  const legacy = meta.entity;
+  if (legacy && typeof legacy.name === 'string' && legacy.name.length > 0) {
+    const dup = out.some(e => e.name === legacy.name);
+    if (!dup) out.unshift(normalizeEntity(legacy));
+  }
+  return out;
+}
+
+/** First entity (legacy-compat primary). Null if module has no entities. */
+export function getPrimaryEntity(meta: ModuleMeta | null | undefined): MetaEntity | null {
+  return getEntities(meta)[0] || null;
+}
+
+/** Stored bare tableName of the primary entity (pre-userId-injection). */
+export function getPrimaryTableName(meta: ModuleMeta | null | undefined): string | null {
+  const e = getPrimaryEntity(meta);
+  return (e && typeof e.tableName === 'string' && e.tableName.length > 0) ? e.tableName : null;
+}
+
+/**
+ * Pair an endpoint to its owning entity. Used by openapi-export to pick the
+ * right `$ref` schema per endpoint (multi-entity modules need per-endpoint
+ * entity resolution, not one-size-fits-all firstEntity).
+ *
+ * Priority:
+ *   1) endpoint.entity (explicit, future-proof)
+ *   2) endpoint.controller name — strip verb prefix / ById suffix, match entity.name
+ *   3) endpoint.path segments — match literal segment or trailing-s-singularized
+ *   4) fallback: primary entity
+ */
+export function pickEntityForEndpoint(
+  ep: MetaEndpoint & { entity?: string },
+  entities: MetaEntity[]
+): MetaEntity | null {
+  if (!entities.length) return null;
+
+  // 1) explicit `entity` reference on the endpoint
+  if (ep.entity) {
+    const hit = entities.find(e => e.name === ep.entity);
+    if (hit) return hit;
+  }
+
+  // 2) controller name heuristic:  listWarehouses / getItemById / createInventory → Warehouse / Item / Inventory
+  if (ep.controller) {
+    const stripped = ep.controller
+      .replace(/^(list|get|create|update|remove|delete)/i, '')
+      .replace(/ById$/i, '')
+      .replace(/s$/i, '');
+    if (stripped) {
+      const hit = entities.find(e => e.name.toLowerCase() === stripped.toLowerCase());
+      if (hit) return hit;
+    }
+  }
+
+  // 3) path segment heuristic: /items → Item, /inventory → Inventory, /warehouses → Warehouse
+  if (ep.path) {
+    const segs = ep.path.split('/').filter(Boolean).filter(s => !s.startsWith(':') && !s.startsWith('{'));
+    for (const seg of segs) {
+      const lc = seg.toLowerCase();
+      const singular = lc.replace(/s$/, '');
+      const hit = entities.find(e => {
+        const n = e.name.toLowerCase();
+        return n === lc || n === singular;
+      });
+      if (hit) return hit;
+    }
+  }
+
+  // 4) fallback
+  return entities[0];
 }

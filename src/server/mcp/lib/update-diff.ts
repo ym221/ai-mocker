@@ -9,6 +9,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { readModuleMeta } from '../../core/openapi-export.js';
+import { getEntities } from '../../core/meta-schema.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -63,7 +64,7 @@ export function snapshotMeta(userId: number, moduleName: string): MetaSnapshot {
   const entityNames = new Set<string>();
   const fieldsByEntity = new Map<string, Set<string>>();
   const constraintIds = new Set<string>();
-  for (const ent of meta?.entities || []) {
+  for (const ent of getEntities(meta)) {
     entityNames.add(ent.name);
     fieldsByEntity.set(ent.name, new Set((ent.fields || []).map((f) => f.name)));
     for (const c of ent.constraints || []) {

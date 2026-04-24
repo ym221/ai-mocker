@@ -4,6 +4,7 @@ import { pathToFileURL } from 'url';
 import { resetTests, runAllTests } from '../../core/test-runner.js';
 import { mockContext } from '../../core/base-model.js';
 import { sqlite } from '../../core/database.js';
+import { getEntities } from '../../core/meta-schema.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -24,8 +25,11 @@ export async function runTest(userId: number, moduleName: string): Promise<{
     try {
       const { readFileSync } = await import('fs');
       const meta = JSON.parse(readFileSync(metaPath, 'utf-8'));
-      for (const entity of meta.entities || []) {
-        const tableName = `mock__${userId}_${entity.name}`;
+      for (const entity of getEntities(meta)) {
+        // Prefer the declared tableName; fall back to the `mock__<name>` convention
+        // for legacy modules that omitted it.
+        const bare = (entity.tableName || `mock__${entity.name}`).replace(/^mock__/, '');
+        const tableName = `mock__${userId}_${bare}`;
         try {
           sqlite.exec(`DELETE FROM \`${tableName}\``);
         } catch {

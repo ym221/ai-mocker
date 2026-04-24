@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { faker } from '@faker-js/faker';
 import { BaseModel, mockContext } from '../../core/base-model.js';
 import { sqlite } from '../../core/database.js';
+import { getEntities } from '../../core/meta-schema.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -102,7 +103,7 @@ function getModuleMeta(userId: number, moduleName: string) {
 
 function resolveTableName(userId: number, moduleName: string, entityName?: string): { tableName: string; meta: Record<string, unknown>; entityName: string } {
   const meta = getModuleMeta(userId, moduleName);
-  const entities = (meta.entities as Array<{ name: string; tableName?: string }> | undefined) ?? [];
+  const entities = getEntities(meta);
   const entity = entityName ? entities.find(e => e.name === entityName) : entities[0];
   if (!entity) {
     throw new Error(`Entity ${entityName ? `"${entityName}"` : '[0]'} not found in ${moduleName}/_meta.json`);
@@ -163,10 +164,24 @@ function ensureTableExists(userId: number, moduleName: string, tableName: string
     if (existsSync(metaPath)) {
       try {
         const meta = JSON.parse(readFileSync(metaPath, 'utf-8'));
-        if (meta.entities?.[0]) {
-          meta.entities[0].tableName = actualBare;
-          writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+        // Patch whichever holder owns the mismatched tableName (entity or entities[i]).
+        let changed = false;
+        if (meta.entity?.tableName === tableName) {
+          meta.entity.tableName = actualBare;
+          changed = true;
         }
+        for (const e of (meta.entities || []) as Array<{ tableName?: string }>) {
+          if (e.tableName === tableName) {
+            e.tableName = actualBare;
+            changed = true;
+          }
+        }
+        if (!changed) {
+          // Fallback: patch primary wherever it lives.
+          if (meta.entities?.[0]) meta.entities[0].tableName = actualBare;
+          else if (meta.entity) meta.entity.tableName = actualBare;
+        }
+        writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
       } catch { /* non-critical */ }
     }
     return newTables[0];
@@ -234,7 +249,7 @@ export async function manageData(
 
       case 'bulk_generate': {
         const count = options?.count ?? 10;
-        const entity = meta.entities?.find((e: { name: string }) => e.name === entityName);
+        const entity = getEntities(meta).find(e => e.name === entityName);
         const fields: MetaField[] = entity?.fields || [];
         const rules = options?.rules || {};
         const results: Record<string, unknown>[] = [];

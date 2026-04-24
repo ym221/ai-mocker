@@ -23,6 +23,8 @@ import {
   instructionsDiffer,
 } from '../lib/instruction-utils.js';
 import { MCP_ERROR_CODES, mcpError } from '../lib/error-codes.js';
+import { tryAcquire, release } from '../lib/concurrency-gate.js';
+import { randomUUID } from 'crypto';
 
 const GENERATED_DIR = resolve('generated');
 const DEFAULT_WAIT_MAX_SEC = 60;
@@ -273,6 +275,23 @@ export function registerUpdateModuleTool(server: McpServer): void {
       }
 
       // Fresh start path (no in-flight OR we just replaced it)
+      // Concurrency gate: reserve a slot BEFORE we touch any resources.
+      const reservationId = randomUUID();
+      const gate = tryAcquire(user.userId, reservationId, moduleName);
+      if (!gate.ok) {
+        return mcpError({
+          code: MCP_ERROR_CODES.BUSY,
+          message: `Concurrency limit reached (${gate.scope}): user=${gate.userConcurrent}/${gate.userLimit}, global=${gate.globalConcurrent}/${gate.globalLimit}.`,
+          hint: gate.hint,
+          scope: gate.scope,
+          userConcurrent: gate.userConcurrent,
+          userLimit: gate.userLimit,
+          globalConcurrent: gate.globalConcurrent,
+          globalLimit: gate.globalLimit,
+          runningSessions: gate.runningSessions,
+        });
+      }
+
       const userContent = buildUpdateUserContent(moduleName, instruction);
       const sendProgress = makeProgressSender(extra);
 
@@ -289,7 +308,15 @@ export function registerUpdateModuleTool(server: McpServer): void {
           presetName: typeof preset === 'string' ? preset : undefined,
         });
         sessionId = started.sessionId;
+        // Rekey the gate slot to the real sessionId + spin a background release-on-terminal watcher
+        release(reservationId);
+        tryAcquire(user.userId, sessionId, moduleName);
+        void (async () => {
+          try { await attachAndWait(sessionId, undefined); } catch { /* ignore */ }
+          release(sessionId);
+        })();
       } catch (err) {
+        release(reservationId);
         const msg = err instanceof Error ? err.message : String(err);
         const isProviderErr = /provider|preset/i.test(msg);
         return mcpError({

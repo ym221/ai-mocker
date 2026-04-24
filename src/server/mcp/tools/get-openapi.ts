@@ -5,6 +5,7 @@ import { db } from '../../core/database.js';
 import { modules } from '../../core/schema.js';
 import { buildOpenApi } from '../../core/openapi-export.js';
 import { getMcpUserId } from '../context.js';
+import { MCP_ERROR_CODES, mcpError } from '../lib/error-codes.js';
 
 export function registerGetOpenApiTool(server: McpServer): void {
   server.registerTool(
@@ -26,22 +27,22 @@ export function registerGetOpenApiTool(server: McpServer): void {
         .where(and(eq(modules.userId, userId), eq(modules.name, moduleName)))
         .get();
       if (!mod) {
-        return {
-          isError: true,
-          content: [
-            { type: 'text', text: `Module '${moduleName}' not found for current user.` },
-          ],
-        };
+        return mcpError({
+          code: MCP_ERROR_CODES.MODULE_NOT_FOUND,
+          message: `Module '${moduleName}' not found for current user.`,
+          hint: 'Call list_modules to see available modules.',
+          moduleName,
+        });
       }
 
       const spec = buildOpenApi(userId, moduleName);
       if (!spec) {
-        return {
-          isError: true,
-          content: [
-            { type: 'text', text: `Cannot build OpenAPI for '${moduleName}': _meta.json missing or invalid.` },
-          ],
-        };
+        return mcpError({
+          code: MCP_ERROR_CODES.INTERNAL_ERROR,
+          message: `Cannot build OpenAPI for '${moduleName}': _meta.json missing or invalid.`,
+          hint: 'Call get_module_health to inspect. You may need update_module to regenerate.',
+          moduleName,
+        });
       }
 
       return {

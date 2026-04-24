@@ -23,6 +23,8 @@ import {
   instructionsDiffer,
 } from '../lib/instruction-utils.js';
 import { MCP_ERROR_CODES, mcpError } from '../lib/error-codes.js';
+import { tryAcquire, release } from '../lib/concurrency-gate.js';
+import { randomUUID } from 'crypto';
 
 const GENERATED_DIR = resolve('generated');
 const DEFAULT_WAIT_MAX_SEC = 60;
@@ -338,6 +340,23 @@ export function registerCreateModuleFromSpecTool(server: McpServer): void {
       }
 
       // Fresh start
+      // Concurrency gate: reserve a slot first.
+      const reservationId = randomUUID();
+      const gate = tryAcquire(user.userId, reservationId, moduleName ?? null);
+      if (!gate.ok) {
+        return mcpError({
+          code: MCP_ERROR_CODES.BUSY,
+          message: `Concurrency limit reached (${gate.scope}): user=${gate.userConcurrent}/${gate.userLimit}, global=${gate.globalConcurrent}/${gate.globalLimit}.`,
+          hint: gate.hint,
+          scope: gate.scope,
+          userConcurrent: gate.userConcurrent,
+          userLimit: gate.userLimit,
+          globalConcurrent: gate.globalConcurrent,
+          globalLimit: gate.globalLimit,
+          runningSessions: gate.runningSessions,
+        });
+      }
+
       const userContent = buildCreateUserContent(spec, moduleName);
       const sendProgress = makeProgressSender(extra);
 
@@ -354,7 +373,14 @@ export function registerCreateModuleFromSpecTool(server: McpServer): void {
           presetName: typeof preset === 'string' ? preset : undefined,
         });
         sessionId = started.sessionId;
+        release(reservationId);
+        tryAcquire(user.userId, sessionId, moduleName ?? null);
+        void (async () => {
+          try { await attachAndWait(sessionId, undefined); } catch { /* ignore */ }
+          release(sessionId);
+        })();
       } catch (err) {
+        release(reservationId);
         const msg = err instanceof Error ? err.message : String(err);
         const isProviderErr = /provider|preset/i.test(msg);
         return mcpError({

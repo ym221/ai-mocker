@@ -5,6 +5,7 @@ import { db } from '../../core/database.js';
 import { modules } from '../../core/schema.js';
 import { deleteModule } from '../../agent/tools/delete-module.js';
 import { getMcpUserId } from '../context.js';
+import { MCP_ERROR_CODES, mcpError } from '../lib/error-codes.js';
 
 export function registerDeleteModuleTool(server: McpServer): void {
   server.registerTool(
@@ -24,10 +25,12 @@ export function registerDeleteModuleTool(server: McpServer): void {
         .where(and(eq(modules.userId, userId), eq(modules.name, moduleName)))
         .get();
       if (!mod) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `Module '${moduleName}' not found.` }],
-        };
+        return mcpError({
+          code: MCP_ERROR_CODES.MODULE_NOT_FOUND,
+          message: `Module '${moduleName}' not found.`,
+          hint: 'Call list_modules to see available modules.',
+          moduleName,
+        });
       }
 
       const message = await deleteModule(userId, moduleName);

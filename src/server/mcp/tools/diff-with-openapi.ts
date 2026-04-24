@@ -6,6 +6,7 @@ import { modules } from '../../core/schema.js';
 import { buildOpenApi, readModuleMeta } from '../../core/openapi-export.js';
 import { matchCondition } from '../../core/validator.js';
 import { getMcpUserId } from '../context.js';
+import { MCP_ERROR_CODES, mcpError } from '../lib/error-codes.js';
 
 type DiffKind =
   | 'endpoint-not-in-spec'
@@ -287,18 +288,22 @@ export function registerDiffWithOpenApiTool(server: McpServer): void {
         .where(and(eq(modules.userId, userId), eq(modules.name, moduleName)))
         .get();
       if (!mod) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `Module '${moduleName}' not found.` }],
-        };
+        return mcpError({
+          code: MCP_ERROR_CODES.MODULE_NOT_FOUND,
+          message: `Module '${moduleName}' not found.`,
+          hint: 'Call list_modules to see available modules.',
+          moduleName,
+        });
       }
 
       const spec = buildOpenApi(userId, moduleName);
       if (!spec) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `Cannot build OpenAPI for '${moduleName}'.` }],
-        };
+        return mcpError({
+          code: MCP_ERROR_CODES.INTERNAL_ERROR,
+          message: `Cannot build OpenAPI for '${moduleName}'.`,
+          hint: 'Call get_module_health to inspect the module.',
+          moduleName,
+        });
       }
 
       const diffs: Diff[] = [];

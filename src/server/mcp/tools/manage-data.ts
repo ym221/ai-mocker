@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { manageData } from '../../agent/tools/manage-data.js';
 import { getMcpUserId } from '../context.js';
+import { MCP_ERROR_CODES, mcpError } from '../lib/error-codes.js';
 
 export function registerManageDataTool(server: McpServer): void {
   server.registerTool(
@@ -38,10 +39,22 @@ export function registerManageDataTool(server: McpServer): void {
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `manage_data failed: ${msg}` }],
-        };
+        const isNotFound = /not\s+found|does\s+not\s+exist|no\s+such/i.test(msg);
+        const isValidation = /validation|invalid|required/i.test(msg);
+        let code: string = MCP_ERROR_CODES.INTERNAL_ERROR;
+        if (isNotFound) code = MCP_ERROR_CODES.MODULE_NOT_FOUND;
+        else if (isValidation) code = MCP_ERROR_CODES.VALIDATION_FAILED;
+        return mcpError({
+          code: code as any,
+          message: `manage_data failed: ${msg}`,
+          hint: isNotFound
+            ? 'Verify moduleName and that the table exists. Call get_module_health for diagnostics.'
+            : isValidation
+              ? 'Check your data against the module contract via get_openapi.'
+              : 'Inspect server logs; retry if transient.',
+          action,
+          moduleName,
+        });
       }
     }
   );

@@ -27,7 +27,8 @@ const GENERATED_DIR = resolve('generated');
 
 export type EventType =
   | 'user' | 'thinking' | 'text' | 'tool_call' | 'tool_result'
-  | 'card' | 'image' | 'md' | 'error' | 'done' | 'aborted' | 'paused';
+  | 'card' | 'image' | 'md' | 'error' | 'done' | 'aborted' | 'paused'
+  | 'heartbeat';
 
 export interface StreamEvent {
   seq: number;
@@ -44,6 +45,11 @@ const registry = new Map<string, ChatRunner>();
 const IDLE_CLEANUP_MS = 30 * 60 * 1000;   // 活跃态清理窗口
 const PAUSED_KEEP_MS = 24 * 60 * 60 * 1000; // paused runner 保留时间
 const RUN_TIMEOUT_MS = Number(process.env.CHAT_RUN_TIMEOUT_MS || 10 * 60 * 1000); // 10min hard timeout (configurable)
+let heartbeatMsOverride: number | null = null;
+function getHeartbeatMs(): number {
+  if (heartbeatMsOverride != null) return heartbeatMsOverride;
+  return Number(process.env.CHAT_HEARTBEAT_MS ?? 30_000); // 0 disables heartbeat
+}
 
 // ==================== Utilities ====================
 
@@ -81,6 +87,9 @@ export class ChatRunner {
 
   private idleTimer: NodeJS.Timeout | null = null;
   private runTimeoutTimer: NodeJS.Timeout | null = null;
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private lastToolCallName: string | null = null;
+  private lastStageLabel: string = 'starting';
   private assistantStartedAt: number | null = null;
   private moduleIntent: { moduleName: string; operation: 'create' | 'edit' } | null = null;
   private pendingCardUserId: number | null = null;
@@ -267,6 +276,7 @@ export class ChatRunner {
 
   private bufferText(text: string): void {
     this.textBuffer += text;
+    this.lastStageLabel = 'writing';
     if (this.textBuffer.length >= ChatRunner.FLUSH_CHARS) {
       this.flushTextBuffers();
     } else {
@@ -276,6 +286,7 @@ export class ChatRunner {
 
   private bufferThinking(text: string): void {
     this.thinkingBuffer += text;
+    this.lastStageLabel = 'thinking';
     if (this.thinkingBuffer.length >= ChatRunner.FLUSH_CHARS) {
       this.flushTextBuffers();
     } else {
@@ -307,6 +318,34 @@ export class ChatRunner {
 
   private clearRunTimeout(): void {
     if (this.runTimeoutTimer) { clearTimeout(this.runTimeoutTimer); this.runTimeoutTimer = null; }
+  }
+
+  private armHeartbeat(): void {
+    this.clearHeartbeat();
+    const ms = getHeartbeatMs();
+    if (ms <= 0) return;
+    this.heartbeatTimer = setInterval(() => {
+      if (this.status !== 'running') return;
+      const elapsedSec = this.assistantStartedAt
+        ? Math.floor((Date.now() - this.assistantStartedAt) / 1000)
+        : 0;
+      this.appendEvent('heartbeat', {
+        stage: this.lastStageLabel,
+        elapsedSec,
+        currentToolCall: this.lastToolCallName,
+      });
+    }, ms);
+    // unref so node can exit cleanly during tests
+    this.heartbeatTimer.unref?.();
+  }
+
+  /** Test hook — override the heartbeat interval for this process. */
+  static setHeartbeatMsForTest(ms: number | null): void {
+    heartbeatMsOverride = ms;
+  }
+
+  private clearHeartbeat(): void {
+    if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
   }
 
   private _timedOut = false;
@@ -387,6 +426,7 @@ export class ChatRunner {
 
   private finalize(terminal: 'done' | 'paused' | 'error' | 'aborted', extra?: Record<string, unknown>): void {
     this.clearRunTimeout();
+    this.clearHeartbeat();
     this.flushTextBuffers();
 
     // Order matters: update module state first, THEN emit cards (cards carry fresh status),
@@ -506,6 +546,10 @@ export class ChatRunner {
 
     // Task 7: hard timeout to auto-finalize stuck runs
     this.armRunTimeout();
+    // MCP-5: periodic heartbeat while running
+    this.lastStageLabel = 'starting';
+    this.lastToolCallName = null;
+    this.armHeartbeat();
 
     // 5. Kick off AI (or fake) in background
     // Test sentinels use includes() (not startsWith) so they survive MCP-tool
@@ -552,6 +596,8 @@ export class ChatRunner {
       this.flushTextBuffers();
       // tool call appears EARLY so isGenerating becomes true quickly (enables banner)
       await sleep(toolGap);
+      this.lastToolCallName = 'write_file';
+      this.lastStageLabel = 'tool:write_file';
       this.appendEvent('tool_call', { callId: 'fake1', name: 'write_file', args: { path: 'test/a.ts' } });
       // text chunks stream while tool still "running"
       const chunks = ['你好！', '这是一个', '模拟的', '流式回复，', '用于测试可恢复架构。'];
@@ -694,6 +740,8 @@ export class ChatRunner {
               const callId = part.toolCallId || `${part.toolName}-${Date.now()}`;
               const args = part.input ?? part.args;
               collectedToolCalls.set(callId, { name: part.toolName, args });
+              this.lastToolCallName = part.toolName;
+              this.lastStageLabel = `tool:${part.toolName}`;
               this.appendEvent('tool_call', { callId, name: part.toolName, args });
 
               if (args && typeof args === 'object') {

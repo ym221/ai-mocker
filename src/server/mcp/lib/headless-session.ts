@@ -19,7 +19,7 @@ import { ChatRunner, type StreamEvent } from '../../agent/chat-runner.js';
 
 export interface HeadlessProgress {
   seq: number;
-  stage: 'thinking' | 'writing' | 'tool' | 'module_update' | 'text';
+  stage: 'thinking' | 'writing' | 'tool' | 'module_update' | 'text' | 'heartbeat';
   detail?: Record<string, unknown>;
 }
 
@@ -110,6 +110,14 @@ function toProgress(ev: StreamEvent): HeadlessProgress | null {
         seq: ev.seq,
         stage: 'module_update',
         detail: { moduleName: p?.data?.moduleName ?? p?.moduleName, status: p?.data?.status ?? p?.status },
+      };
+    }
+    case 'heartbeat': {
+      const p = ev.payload as any;
+      return {
+        seq: ev.seq,
+        stage: 'heartbeat',
+        detail: { stage: p?.stage, elapsedSec: p?.elapsedSec, currentToolCall: p?.currentToolCall ?? null },
       };
     }
     default:

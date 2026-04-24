@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { runTest } from '../../agent/tools/run-test.js';
 import { getMcpUserId } from '../context.js';
+import { MCP_ERROR_CODES, mcpError } from '../lib/error-codes.js';
 
 export function registerRunTestTool(server: McpServer): void {
   server.registerTool(
@@ -36,10 +37,15 @@ export function registerRunTestTool(server: McpServer): void {
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `run_test failed: ${msg}` }],
-        };
+        const isNotFound = /not\s+found|no\s+such/i.test(msg);
+        return mcpError({
+          code: isNotFound ? MCP_ERROR_CODES.MODULE_NOT_FOUND : MCP_ERROR_CODES.INTERNAL_ERROR,
+          message: `run_test failed: ${msg}`,
+          hint: isNotFound
+            ? 'Verify moduleName. Call list_modules for a list.'
+            : 'Call get_module_health to inspect module state, or check server logs.',
+          moduleName,
+        });
       }
     }
   );

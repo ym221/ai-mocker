@@ -29,7 +29,7 @@ export function registerUpdateModuleTool(server: McpServer): void {
       title: 'Update Existing Mock Module',
       description:
         'Modify an existing Mock module. Pass a natural-language instruction describing the desired change (add a field, add an endpoint, tweak response shape, fix a bug). '
-        + 'Blocks up to `waitMaxSec` seconds (default 60, max 300); if generation is still running when the window elapses returns { status:"still-running", sessionId } — call this tool again with the same args to auto-resume. '
+        + 'Blocks up to `waitMaxSec` seconds (default 180, max 300); if generation is still running when the window elapses returns { status:"still-running", sessionId } — call this tool again with the same args to auto-resume. '
         + 'If another session for this moduleName is already in-flight, `onConflict` decides: "resume" (default) attaches to it, "reject" returns ALREADY_PROCESSING, "replace" cancels it and starts fresh. '
         + 'Set dry_run=true to preview which entities/fields/endpoints would change without touching files. Triggers a full AI generation cycle; progress streamed via MCP progress notifications.',
       inputSchema: {

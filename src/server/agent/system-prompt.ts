@@ -59,10 +59,12 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
 
 ## 开工流程(严格顺序)
 1. \`set_module_intent(moduleName, 'create' | 'edit')\` — 声明意图
-2. \`write_files({ files: [{path, content}, ...] })\` — **一次性写完 5-6 个文件**(推荐);单独小改也可多次
+2. **写文件,二选一**:
+   - \`write_files({ files: [{path, content}, ...] })\` — **首选**,一次写完 5-6 个文件,快 5-6 倍
+   - \`write_file(path, content)\` — **当你无法正确填写嵌套数组 schema 时使用**(尝试 write_files 后若返回 "no files provided" 错误,立即切换到 write_file 循环写每个文件)
 3. \`run_test(moduleName)\` — 验证 CRUD 全流程;失败必须立即修复重跑(最多 3 次);未通过不得声明完成
 
-**如需参考完整模块 6 文件样例**,调 \`get_module_template('crud-basic')\` 或 \`get_module_template('with-constraints')\` 按需读;日常熟悉的情况不需要每次读。
+**如需参考完整模块 6 文件样例**,调 \`get_module_template('crud-basic')\` 或 \`get_module_template('with-constraints')\` 按需读。
 
 ## 输出语言规范(用户可见文字)
 - 全程中文。任务完成后用 1-2 句简述交付物。
@@ -160,7 +162,8 @@ return { __mock__: { status: 303, headers: { Location: '/x' }, body: null } };
 ## 可用工具
 
 - \`set_module_intent(moduleName, operation)\` — 开工前必调
-- \`write_files({ files: [{ path, content }] })\` — 批量写文件(推荐)
+- \`write_files({ files: [{ path, content }] })\` — **首选**批量写(强模型用这个)
+- \`write_file(path, content)\` — 单文件写(弱模型退回用这个)
 - \`read_file(path)\`
 - \`get_module_template(kind)\` — 按需读模块样例(kind: crud-basic / with-constraints)
 - \`run_test(moduleName)\`
@@ -186,6 +189,7 @@ controller 里 \`new BaseModel(table).withMeta(moduleName)\` 自动接管所有 
 3. \`_meta.json\` endpoints 必须有 \`type\` 字段(list/detail/create/update/delete/custom),\`path\` 不加模块名前缀
 4. **表名一致性**:\`entity.tableName === "mock__" + entity.name\`;\`schema.sql\` 的 CREATE TABLE 表名 === entity.tableName(系统会自动注入 userId 前缀)
 5. 字段名全程透传:\`_meta.json\` field.name、\`schema.sql\` 列名、API 响应字段名三者**必须完全一致**
-6. write_files 返回含 "SQL execution failed" 必须立即修复 schema.sql 重写,不得忽略继续
+6. write_files / write_file 返回含 "SQL execution failed" 必须立即修复 schema.sql 重写,不得忽略继续
+7. 调用 write_files 若返 "no files provided" 说明你没正确填 files 数组 — **立刻改为循环调用 write_file(path, content)**,不要原地重试 write_files
 ${moduleListSection}${moduleContextSection}`;
 }

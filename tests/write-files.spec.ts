@@ -220,10 +220,12 @@ test.describe('Task M1.2 — batch write_files', () => {
     expect(metaFile?.warnings?.length ?? 0).toBeGreaterThan(0);
   });
 
-  test('WF06 空 files 数组 → 返错, 不副作用', async () => {
+  test('WF06 空 files 数组 → 错误信息引导 AI 切换到 write_file', async () => {
     const { writeFiles } = await import('../src/server/agent/tools/write-files.js');
     const r = await writeFiles(USER_ID, { files: [] });
     expect(r.success).toBe(false);
-    expect(r.message).toContain('no files');
+    expect(r.message).toContain('write_file(path, content)');  // explicit fallback hint
+    expect(r.message).toMatch(/schema is \{ files: \[/);        // shows correct schema
+    expect(r.error).toContain('switch to write_file');
   });
 });

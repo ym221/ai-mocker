@@ -720,7 +720,7 @@ export class ChatRunner {
         system: systemPrompt + extraSystemSuffix,
         messages: coreMessages,
         tools,
-        stopWhen: stepCountIs(20),
+        stopWhen: stepCountIs(Number(process.env.CHAT_MAX_STEPS ?? 40)),
         abortSignal: abortController.signal,
         ...(providerOptions ? { providerOptions } : {}),
       });

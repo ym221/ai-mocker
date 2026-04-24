@@ -108,7 +108,7 @@ export function registerCreateModuleFromSpecTool(server: McpServer): void {
       title: 'Create Mock Module from Spec',
       description:
         'Generate a new Mock module from an API spec. The spec can be an OpenAPI 3 JSON/YAML string or a free-form natural-language description. '
-        + 'Blocks up to `waitMaxSec` seconds (default 60, max 300); if generation is still running when the window elapses returns { status:"still-running", sessionId } — call this tool again with the same args to auto-resume. '
+        + 'Blocks up to `waitMaxSec` seconds (default 180, max 300); if generation is still running when the window elapses returns { status:"still-running", sessionId } — call this tool again with the same args to auto-resume. '
         + 'If another session for the same moduleName is already in-flight, `onConflict` decides: "resume" (default) attaches, "reject" returns ALREADY_PROCESSING, "replace" cancels it and starts fresh (requires moduleName). '
         + 'Set dry_run=true to preview the plan without actually generating.',
       inputSchema: {

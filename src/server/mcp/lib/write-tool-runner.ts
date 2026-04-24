@@ -28,7 +28,7 @@ import { instructionsDiffer } from './instruction-utils.js';
 import { MCP_ERROR_CODES, mcpError } from './error-codes.js';
 import { humanizeStage } from './stage-humanize.js';
 
-const DEFAULT_WAIT_MAX_SEC = 60;
+const DEFAULT_WAIT_MAX_SEC = 180;  // 3 min, aligned with real-LLM tool-call cadence
 const MAX_WAIT_MAX_SEC = 300;
 
 export type OnConflict = 'resume' | 'reject' | 'replace';

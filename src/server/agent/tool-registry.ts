@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { tool } from 'ai';
+import { writeFile } from './tools/write-file.js';
 import { writeFiles } from './tools/write-files.js';
 import { readFile } from './tools/read-file.js';
 import { runTest } from './tools/run-test.js';
@@ -32,13 +33,28 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         return { success: true, ...result };
       },
     }),
+    write_file: tool({
+      description:
+        'Write ONE file to generated/{userId}/. Use this when you cannot emit nested array schemas (small models) or when you want to write files one at a time for better control. '
+        + 'SQL files auto-execute; _meta.json auto-syncs to modules table. For efficient multi-file writes (5-6 files at once), prefer `write_files` — but if you struggle with its nested schema, fall back to calling `write_file` once per file.',
+      parameters: z.object({
+        path: z.string().describe('File path relative to generated/{userId}/, e.g., "order/_meta.json"'),
+        content: z.string().describe('Full file content'),
+      }),
+      execute: async ({ path, content }) => serialize(() => writeFile(userId, path, content)),
+    }),
+
     write_files: tool({
-      description: 'Write multiple files atomically in a single call. Use this for creating a new module (5-6 files at once) or any multi-file change. SQL files auto-execute; _meta.json auto-syncs to modules table. If any side-effect fails, the whole batch rolls back on both filesystem and DB.',
+      description:
+        'PREFERRED when your model reliably emits nested array schemas (Claude/GPT-4/large Gemini). '
+        + 'Writes multiple files atomically in ONE call — up to 5-6× faster than looping `write_file`. '
+        + 'SQL files auto-execute; _meta.json auto-syncs to modules table. If any side-effect fails, the whole batch rolls back on both filesystem and DB. '
+        + 'If you attempt this and get "no files provided" errors, switch to `write_file` (single-file) instead.',
       parameters: z.object({
         files: z.array(z.object({
           path: z.string().describe('File path relative to generated/{userId}/, e.g., "order/_meta.json"'),
           content: z.string().describe('File content'),
-        })).min(1).describe('Files to write. Keep ordering meaningful: schema.sql should come before _meta.json if you want the SQL reconciliation to inform the meta sync.'),
+        })).min(1).describe('Array of { path, content }. Keep ordering meaningful: schema.sql should come before _meta.json.'),
       }),
       execute: async ({ files }) => serialize(() => writeFiles(userId, { files })),
     }),

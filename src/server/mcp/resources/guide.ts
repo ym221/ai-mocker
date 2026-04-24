@@ -18,7 +18,7 @@ MockForge 是 AI 驱动的 **Mock API 服务**。用户在 Web UI 对话生成 M
 ### 推荐流程：naive 重发即可
 
 1. 调 \`update_module({ moduleName, instruction })\`
-2. 默认阻塞最多 \`waitMaxSec\` 秒（默认 60，上限 300）
+2. 默认阻塞最多 \`waitMaxSec\` 秒（默认 180，上限 300）
 3. 完成 → 返 \`{ status:"updated", ... }\`
 4. 超时仍在跑 → 返 \`{ sessionId, status:"still-running", stage, elapsedSec }\`
    → 直接**重发同样的 update_module**（同 moduleName 同 instruction）

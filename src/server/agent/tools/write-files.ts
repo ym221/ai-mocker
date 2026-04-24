@@ -153,10 +153,11 @@ export async function writeFiles(userId: number, input: WriteFilesInput): Promis
   if (!input.files || input.files.length === 0) {
     return {
       success: false,
-      message: 'write_files: no files provided',
+      message: 'write_files: no `files` array provided. Your tool-call args were empty or malformed — the correct schema is { files: [{ path: "...", content: "..." }, ...] }. '
+        + 'If your model cannot reliably emit nested arrays, STOP RETRYING write_files and call `write_file(path, content)` once per file instead.',
       filesWritten: 0,
       perFile: [],
-      error: 'empty input',
+      error: 'empty input — switch to write_file(path, content) per file',
     };
   }
 

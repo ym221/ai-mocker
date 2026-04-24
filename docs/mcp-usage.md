@@ -6,15 +6,15 @@
 
 ## 1. 背景
 
-MockForge 通过 Model Context Protocol（MCP）对外暴露**14 个工具 + 1 个使用指南资源**，让 IDE 里的 AI 助手能够：
+MockForge 通过 Model Context Protocol（MCP）对外暴露**12 个工具 + 1 个使用指南资源**，让 IDE 里的 AI 助手能够：
 
-- **读**：列模块、拿 API 文档 / OpenAPI、查 Mock 访问日志、诊断模块健康度
-- **写**：从规格生成模块、修改模块、跑测试、造数据、删模块
+- **读**：列模块、用 `inspect_module` 一次拿 doc+openapi+health、查 Mock 访问日志
+- **写**：从规格生成模块（`create_module_from_spec`）、修改模块（`update_module`）、跑测试、造数据、删模块
 - **诊断**：把实际请求与 OpenAPI 对比（diff）
 - **会话**：查询在跑 session 的状态、主动放弃（Step-MCP-5 新增）
 - **交接**：为后端团队生成 Markdown 交接报告
 
-写工具（`create_module_from_spec` / `update_module`）默认**阻塞最多 60s**；超时仍在跑就返 `still-running` + sessionId，调用方重发同参数即可 **attach-on-resend** 继续等——语义跟普通调用一样。详见 §14。
+写工具默认**阻塞最多 60s**；超时仍在跑就返 `still-running` + sessionId（带 `stageDescription` + `expectedRemainingSec` + `suggestedNextAction`），调用方重发同参数即可 **attach-on-resend** 继续等。Step-Perf-1 后:system prompt 瘦身 60%、`write_files` 批量写盘让模块创建从 7-15min 降到预期 3-5min、provider-aware prompt caching 降 token 成本、humanized 进度让 AI 读得懂。详见 §14 / §15。
 
 MCP 服务与 Web UI **跑在同一进程**，共享同一份 SQLite。IDE AI 开的会话 **Web UI 能看见并接管**。
 
@@ -544,7 +544,95 @@ ChatRunner 启动后每 `CHAT_HEARTBEAT_MS` 毫秒(默认 30000,0 禁用)强发�
 
 ---
 
-## 15. 路线图
+## 15. 为什么变快了 (Step-Perf-1)
+
+Step-MCP-5 解决了"断线续接"让长任务不再抓瞎,但 7-15 min 的绝对时长仍然劝退。Step-Perf-1 把绝对速度砍下来:
+
+### 15.1 system prompt 瘦身 60%
+
+原 18KB 的 system prompt 包含 120 行硬编码 todo 模块 6 文件模板。每次 LLM 调用都完整发送。瘦到 ~7KB,模板搬到 `get_module_template(kind: 'crud-basic' | 'with-constraints')` Agent 工具,AI 不熟悉时再按需拉。
+
+**收益**:每 round 请求 payload ↓60%,transport 时间 ↓20-30%,token 成本同比例下降。
+
+### 15.2 批量 write_files 替代单文件 write_file
+
+**改造前**:AI 生成一个模块要 5-6 次 \`write_file\` tool-call(每次一个文件),= 5-6 次 LLM round-trip × ~60-90s/次 ≈ 7-9 分钟。
+
+**改造后**:新工具 \`write_files({ files: [{path, content}, ...] })\` 一次调用写完 N 个文件,事务语义(failed rollback fs+DB),**5-6 次 round-trip → 1 次**。
+
+\`\`\`ts
+// AI 现在通常这样跑:
+write_files({
+  files: [
+    { path: 'order/_meta.json', content: '...' },
+    { path: 'order/schema.sql', content: '...' },
+    { path: 'order/controller.ts', content: '...' },
+    { path: 'order/test.ts', content: '...' },
+    { path: 'order/api-doc.md', content: '...' },
+  ]
+})
+// 一次返 { success, filesWritten: 5, perFile: [...] }
+\`\`\`
+
+**收益**:总时长 ↓60%,从 7-15 min → 预计 3-5 min。
+
+### 15.3 Provider-aware Prompt Caching
+
+按 provider.type 自动走不同缓存路径:
+- **Anthropic**:注入 \`providerOptions.anthropic.cacheControl: { type: 'ephemeral' }\` 显式标记 system + tools 前缀
+- **OpenAI-compat**(含 Doubao / DeepSeek):后端自动缓存匹配前缀;本代码库已保证 system + tools 前缀字节稳定(PC05 测试)
+
+**Kill switch**:\`ENABLE_PROMPT_CACHE=0\` 环境变量一键关闭显式标记(后端自动缓存仍工作)。
+
+**收益**:token 成本命中时 ↓70%,首 token 延迟 ↓30-50%。
+
+### 15.4 MCP 工具合并 14 → 12
+
+原 \`get_api_doc\` / \`get_openapi\` / \`get_module_health\` 三个读工具语义高度重叠;合并为 \`inspect_module(moduleName, view?)\`,view 可选 \`'all' | 'doc' | 'openapi' | 'health'\`(默认 all)。
+
+\`\`\`ts
+// 一次拿全部
+inspect_module({ moduleName: 'order' })
+// → { doc: { markdown }, openapi: { spec }, health: { status, missingFiles, ... } }
+
+// 想窄
+inspect_module({ moduleName: 'order', view: 'openapi' })
+\`\`\`
+
+**收益**:AI 选择工具更简单;一次 round-trip 拿全信息;guide 内容缩减。
+
+### 15.5 Humanized 进度 + Machine-actionable 错误
+
+- **进度**:MCP progress notification \`message\` 从 "tool:write_files" 变为"正在批量写入模块文件"(\`stage-humanize.ts\` 映射)
+- **still-running 响应**:新增 \`stageDescription\`(中文)+ \`expectedRemainingSec\`(粗略预估)+ \`suggestedNextAction\`(AI-facing 英文动作建议)
+- **错误文本前缀**:每条 mcpError text 以 \`[MOCKFORGE_XXX]\` 开头,AI 扫描分支更快
+- **error recovery_steps**:每个错误 \`structuredContent\` 带 \`recovery_steps: Array<{ tool, args, description } | { action, description }>\` — AI 无需解析自然语言,直接按步骤调下一个工具
+
+\`\`\`jsonc
+// 示例:MODULE_NOT_FOUND 错误
+{
+  "code": "MOCKFORGE_MODULE_NOT_FOUND",
+  "message": "Module 'foo' not found.",
+  "hint": "Call list_modules to see available modules",
+  "recovery_steps": [
+    { "tool": "list_modules", "description": "列出所有可用模块" },
+    { "tool": "create_module_from_spec", "args": { "moduleName": "foo", "spec": "<your-spec>" },
+      "description": "用新 spec 创建 foo" }
+  ]
+}
+\`\`\`
+
+### 15.6 per-session Mutex + 并行读
+
+AI 若同一轮 emit 多个 tool-call:
+- **读类**(\`read_file\` / \`list_modules\` / \`get_module_template\` / \`inspect_module\`):真正并行
+- **写类**(\`write_files\` / \`run_test\` / \`manage_data\` / \`delete_module\`):同 session 内串行(session-mutex),跨 session 互不阻塞
+
+**收益**:读 / 诊断阶段可以 parallel 执行,跨 session 负载不增。
+
+---
+
+## 16. 路线图
 
 | 版本 | 状态 | 能力 |
 |------|------|------|
@@ -552,7 +640,8 @@ ChatRunner 启动后每 `CHAT_HEARTBEAT_MS` 毫秒(默认 30000,0 禁用)强发�
 | Step-MCP-2 | ✅ | 写工具 + 业务侧感知 + 交接报告 + progress notifications + 软 warnings + dry_run |
 | Step-MCP-3 | ✅ | mock-router 放权 + 规范决策硬规则 + provider/model/preset 覆盖 + Web UI 选择器 |
 | Step-MCP-4 | ✅ | _meta.json 约束建模 + OpenAPI 映射 + BaseModel auto-validate + diff 富化 |
-| Step-MCP-5 | ✅(当前) | 单模块单流程 + 自动续接 (waitMaxSec + onConflict=resume) + 并发 gate + heartbeat + 统一错误码 |
-| 未来 | — | 细粒度 Key 权限(read-only / write)、stdio transport、sampling 优化生成、idempotency key |
+| Step-MCP-5 | ✅ | 单模块单流程 + 自动续接 + 并发 gate + heartbeat + 统一错误码 |
+| Step-Perf-1 | ✅(当前) | system prompt 瘦身 60% + batch write_files + prompt caching + 工具合并 14→12 + humanized 进度 + recovery_steps |
+| 未来 | — | Sampling(client 反向 AI)、模块生成结果缓存、thinking 预算自适应、stdio transport、细粒度 Key 权限、idempotency key |
 
-更详细的设计和决策记录见 [`ANALYSIS-AI-DEV-WORKFLOW.md`](../ANALYSIS-AI-DEV-WORKFLOW.md) 和 `CURSOR.md` 的 Step-MCP-{1,2,3,4,5} 章节。
+更详细的设计和决策记录见 [`ANALYSIS-AI-DEV-WORKFLOW.md`](../ANALYSIS-AI-DEV-WORKFLOW.md) 和 `CURSOR.md` 的 Step-MCP-{1,2,3,4,5} / Step-Perf-1 章节。

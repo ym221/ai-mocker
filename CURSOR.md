@@ -2,7 +2,7 @@
 
 ## 当前位置
 - **Phase**: ALL COMPLETE
-- **状态**: Step-MCP-5 完成（waitMaxSec + onConflict=resume 单模块单流程 + 自动续接 + 并发 gate + 30s heartbeat + 统一错误码）
+- **状态**: Step-Perf-1 完成（system prompt 18KB→7KB + batch write_files + prompt caching + 并行 tool mutex + 14→12 MCP 工具合并 + write-tool-runner 抽象 + module-repo + recovery_steps + humanized progress）
 
 ## 已完成 Step
 - [x] Step 1: 项目初始化 (d759059)
@@ -33,6 +33,7 @@
 - [x] **Step-MCP-3**: Mock 保真度 + 规范契约 + 选择器入口 — mock-router 放权 + system-prompt 规范决策硬规则 + MCP provider/model/preset 覆盖 + Web UI 新建对话 dialog + 对话中 meta-bar 切换
 - [x] **Step-MCP-4**: 元数据约束建模 + OpenAPI 映射 + 强 diff — _meta.json 字段约束 (enum/min/max/pattern/unique) + entity.constraints 跨字段规则 + openapi-export 全面映射 + BaseModel.withMeta() auto-validate + diff_with_openapi constraint-violation/cross-field-violation + update_module 富 diff
 - [x] **Step-MCP-5**: 单模块单流程 + 自动续接 + 并发约束 — runHeadlessSession 拆分 start+attach、write 工具 waitMaxSec + onConflict=resume、新增 get_session_status + cancel_session(12→14 工具)、concurrency gate(per-user 3 / global 10)、30s heartbeat keepalive、统一错误码 + hint
+- [x] **Step-Perf-1**: AI 生成提速 + 工具表面简化 + UX 打磨 — system prompt 18KB→7KB(模板外置 get_module_template)、batch write_files 替代 write_file 单文件(6 次 LLM→1 次)、provider-aware prompt caching(Anthropic + OpenAI-compat 前缀稳定)、per-session mutex + 并行读、14→12 MCP 工具(inspect_module 合并 doc+openapi+health)、write-tool-runner 抽象消除 update/create 70% 同构、module-repo 集中 DB+fs 查询、error recovery_steps(machine-actionable 下一步工具)、humanized stage + expectedRemainingSec + suggestedNextAction
 
 ## Step-Chat-Resumable 变更摘要
 计划文档: `plans/STEP-CHAT-RESUMABLE-PLAN.md`
@@ -420,5 +421,52 @@
 - **gate 在 backend process 内存**:跨进程不共享(重启清零);release 通过后台 watcher `attachAndWait(sessionId, undefined)` 订阅 runner 的 close 事件实现
 - **heartbeat 每 30s 一条 → 24h × 2880 = 86.4K 条/session**:可接受(SQLite 批量写快);前端默认过滤不影响 UI
 
+## Step-Perf-1 变更摘要
+目标:让 MockForge MCP 在 IDE AI Agent 场景下真正快而好用。上一轮 MCP-5 把 7-15min 的长任务做了续接保护;本轮把绝对时长砍下来到 3-5min 范围,同时把工具表面精简、进度语言人话化、错误 AI-actionable。
+
+### 起因(用户实测痛点)
+- 生成单个模块要 7-15 分钟(write_file 单次调用 5-6 轮 LLM round-trip)
+- 14 个 MCP 工具里 3 个读工具语义高度重叠(get_api_doc + get_openapi + get_module_health),AI 决策压力
+- update-module.ts + create-module-from-spec.ts 70% 代码同构,维护成本高
+- 进度事件 "tool:write_files" 泄漏工具名给用户
+- 错误消息是人类 hint 文本,AI 需要解析才能决定下一步
+
+### 核心改动(8 Task,里程碑 M1 + M2 + M3)
+
+**M1 — 生成链路提速:**
+- **M1.1 system prompt 瘦身**(`agent/system-prompt.ts` + `agent/templates/samples.ts` + `agent/tools/get-module-template.ts`):18020B → 7274B;120 行 todo 模板移出到 `get_module_template(kind: 'crud-basic' | 'with-constraints')` Agent 工具,AI 需要时再拉
+- **M1.2 batch write_files**(`agent/tools/write-files.ts` + `tool-registry.ts` 注册替换):一次调用写 N 个文件,事务语义(snapshot + atomic commit + 失败全回滚 fs+DB);AI 生成模块从 5-6 次 LLM round-trip 降为 1 次;旧 write_file 工具从 registry 移除(但内部 `writeFile()` 辅助函数保留给测试用)
+- **M1.3 provider-aware prompt caching**(`agent/prompt-cache.ts`):按 provider.type 注入 `providerOptions` — Anthropic 加 `cacheControl: ephemeral`,OpenAI-compat 依赖 backend 自动 cache(前缀字节稳定,PC05 测试验证);env `ENABLE_PROMPT_CACHE=0` 可关;日志 `[prompt-cache]` 行便于观察
+- **M1.4 per-session mutex**(`agent/lib/session-mutex.ts`):write-side 工具(write_files / run_test / manage_data / delete_module)在同一 session 内串行避免 race;read-side 工具(read_file / list_modules / get_module_template)仍可真正并行;`buildTools(userId, runner?)` 只在 runner 存在时上锁
+
+**M2 — 工具表面简化 + UX 打磨:**
+- **M2.1 inspect_module 合并**(`mcp/tools/inspect-module.ts`):`inspect_module(moduleName, view?: 'all'|'doc'|'openapi'|'health')` 替代原 `get_api_doc` + `get_openapi` + `get_module_health`;默认 view=all 一次拿全部;工具数 14 → 12
+- **M2.2 write-tool-runner 抽象**(`mcp/lib/write-tool-runner.ts`):从 update-module.ts + create-module-from-spec.ts 提取共享的 in-flight 检查 + concurrency gate + onConflict 路由 + attach-resume + 响应构造;update-module 346 → 153 行,create-module 409 → 229 行(各个工具只保留差异化的 buildSuccessResponse/buildStillRunningResponse)
+- **M2.3 module-repo + recovery_steps**(`core/module-repo.ts` + `mcp/lib/error-codes.ts`):`getModuleRow` / `loadMeta` / `readModuleFile` 集中 8+ 处散落查询;每个 `mcpError` 现在带 `recovery_steps: Array<{ tool, args, description } | { action, description }>` 供 AI 机读下一步;默认 per-code 自动注入,也可显式传
+- **M2.4 UX polish**(`mcp/lib/stage-humanize.ts`):`humanizeStage(raw)` → `{ description(中文), expectedRemainingSec, suggestedNextAction(AI hint) }`;MCP progress notification + still-running 响应 + get_session_status 三处都改用 humanized 版本;MCP 错误文本前缀 `[MOCKFORGE_XXX]` 便于 AI 扫描
+
+**M3 — 端到端验收:**
+- **M3.1 perf-e2e smoke**(`tests/perf-e2e.spec.ts`):__fake__/__fake_slow__ 打通全链路(PE01-PE04 共 4 条);真实 LLM M25/M32 待用户用 AI Agent 实测
+
+### 工具集变化(12→12 保持但合并了读工具 + Agent 侧新增 get_module_template)
+- **MCP (12)**:list_modules, inspect_module, get_mock_access_log, diff_with_openapi, delete_module, run_test, manage_data, create_module_from_spec, update_module, get_session_status, cancel_session, generate_handoff_report
+- **Agent (8)**:set_module_intent, write_files(新), read_file, run_test, manage_data, list_modules, delete_module, get_module_template(新)
+- 删除:`write_file`(Agent 侧)、`get_api_doc` + `get_openapi` + `get_module_health`(MCP 侧)
+
+### 测试(40+ 新增 + 全部回归绿)
+- **单元**:GT01-05(模板库) + SP07(prompt 体积回归) + WF01-06(batch write + 事务) + PC01-06(provider-aware cache) + PT01-04+PT-T01-03(session mutex) + IM01-05(inspect_module) + ER01-07(recovery_steps) + MR01-06(module-repo) + UX01-04(humanize) + PE01-04(perf E2E smoke) = 共 50 条
+- **回归**:MCP-5 全套 AR/E/ST/CC/HB/EC/GR 各文件全绿(见各 Task 的 commit message)
+- **已知 flaky**(不阻塞,沿用既有策略):M25/M32(真实 gemma LLM) + W06(真实 LLM diff)
+
+### 度量对比(改造前后)
+| 指标 | 改造前 | 改造后 |
+|-----|-------|-------|
+| 生成 6 文件模块时长 | 7-15 min | 预计 3-5 min(batch write + cache) |
+| LLM round-trip 次数 | 5-6 | 1-2 |
+| system prompt 体积(empty) | ~18 KB | **~7.3 KB** |
+| MCP 工具数 | 14 | 12 |
+| update-module.ts + create-module-from-spec.ts 总行数 | 755 | 382(+ runner 283) |
+| 回归测试数 | 430+ | 470+(全绿,新增 40+) |
+
 ## 下一步
-Phase 6 已完成（MCP-1 + MCP-2 + MCP-3 + MCP-4 + MCP-5）。若未来需要：细粒度权限 Key（只读/写分级）、stdio transport、sampling-based 生成优化、idempotency key、per-session Webhook。
+Step-Perf-1 完成。若真实 LLM 实测后仍有优化需求,备选 Step-Perf-2:sampling(MCP 协议反向问 client AI 减少 round-trip)、模块生成结果缓存、thinking 预算自适应、stdio transport、细粒度权限 Key。

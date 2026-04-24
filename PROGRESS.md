@@ -8,7 +8,7 @@
 | 3 | 前端 — 对话 | ✅ 完成 |
 | 4 | 前端 — 模块管理 | ✅ 完成 |
 | 5 | 增强 | ✅ 完成 |
-| 6 | MCP 集成 | ✅ 完成（Step-MCP-1 + Step-MCP-2 + Step-MCP-3 + Step-MCP-4 + Step-MCP-5）|
+| 6 | MCP 集成 | ✅ 完成（Step-MCP-1 + Step-MCP-2 + Step-MCP-3 + Step-MCP-4 + Step-MCP-5 + Step-Perf-1）|
 
 ## Phase 1：项目基础
 
@@ -112,6 +112,20 @@
 - 新增 67 条测试 (meta-schema:9 + openapi-constraints:7 + validator:16 + base-model-validate:8 + diff-with-openapi-constraints:6 + update-module-richdiff:14 + warehouse-constraints e2e:7)
 - 关键回归 148 passed (api-data 13, mcp-server-v2 ex-LLM 25, mcp-warehouse-e2e 6, manage-data-resolve 2, mock-router-response 8, step-ux-polish-5 8, page-chat 23 + chat-resumable + page-modules + page-data-management + navigation + e2e-flows ≈86)
 - 详见 `CURSOR.md` 对应章节
+
+### Step-Perf-1: AI 生成提速 + 工具表面简化 + UX 打磨 ✅
+- **system prompt 瘦身**(agent/system-prompt.ts + agent/templates/samples.ts + agent/tools/get-module-template.ts):18020B → 7274B; 模板外置到 get_module_template(kind) Agent 工具按需读
+- **batch write_files**(agent/tools/write-files.ts):事务语义一次写 N 文件, 5-6 次 LLM round-trip → 1 次; 旧 write_file 从 tool-registry 移除
+- **provider-aware prompt caching**(agent/prompt-cache.ts):Anthropic 注入 cacheControl ephemeral, OpenAI-compat 依赖 backend 自动 cache(前缀字节稳定); ENABLE_PROMPT_CACHE=0 可关
+- **per-session mutex**(agent/lib/session-mutex.ts):write tools 同 session 内串行, read tools 真正并行
+- **inspect_module 合并**(mcp/tools/inspect-module.ts):view='all'|'doc'|'openapi'|'health' 一个工具替代 3 个; MCP 工具数 14 → 12
+- **write-tool-runner 抽象**(mcp/lib/write-tool-runner.ts):update/create 两工具 755 行 → 382 行 + 283 行 runner
+- **module-repo**(core/module-repo.ts):集中 DB + fs 查询, 8+ 处散落调用统一
+- **error recovery_steps**(mcp/lib/error-codes.ts):每个 mcpError 附机器可读 recovery_steps 数组; text 前缀 [MOCKFORGE_XXX]
+- **humanized progress**(mcp/lib/stage-humanize.ts):stageDescription 中文 + expectedRemainingSec + suggestedNextAction; still-running + get_session_status + progress notification 三处接入
+- 新增 50 条测试(GT/SP07/WF/PC/PT/IM/ER/MR/UX/PE)+ 回归 MCP-5 全套绿
+- **工具集**:MCP 12 个(list_modules, inspect_module, get_mock_access_log, diff_with_openapi, delete_module, run_test, manage_data, create_module_from_spec, update_module, get_session_status, cancel_session, generate_handoff_report)/ Agent 8 个(+get_module_template, write_files 替代 write_file)
+- 详见 CURSOR.md 对应章节
 
 ### Step-MCP-5: 单模块单流程 + 自动续接 + 并发约束 ✅
 - **headless-session 拆分**(`mcp/lib/headless-session.ts`): `runHeadlessSession` → `startHeadlessSession()` + `attachAndWait(sessionId, waitMaxSec)` 两相; legacy 门面保留; 新增 `getSessionSnapshot()` DB-only 快照

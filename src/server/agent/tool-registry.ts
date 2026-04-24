@@ -6,6 +6,7 @@ import { runTest } from './tools/run-test.js';
 import { manageData } from './tools/manage-data.js';
 import { listModules } from './tools/list-modules.js';
 import { deleteModule } from './tools/delete-module.js';
+import { fetchModuleTemplate } from './tools/get-module-template.js';
 import type { ChatRunner } from './chat-runner.js';
 
 export function buildTools(userId: number, runner?: ChatRunner) {
@@ -85,6 +86,16 @@ export function buildTools(userId: number, runner?: ChatRunner) {
       }),
       execute: async ({ moduleName }) => {
         return deleteModule(userId, moduleName);
+      },
+    }),
+
+    get_module_template: tool({
+      description: 'Fetch a complete file-by-file module sample when you need a reference for generating a new module. Kinds: "crud-basic" (minimal 5-file todo sample) or "with-constraints" (shows _meta.json field + cross-field constraints). Call this only if the user asks something you are unsure how to structure.',
+      parameters: z.object({
+        kind: z.enum(['crud-basic', 'with-constraints']).describe('Template flavor'),
+      }),
+      execute: async ({ kind }) => {
+        return fetchModuleTemplate(kind);
       },
     }),
   };

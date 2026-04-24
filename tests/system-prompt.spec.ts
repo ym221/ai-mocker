@@ -93,4 +93,22 @@ test.describe('system-prompt structure', () => {
     expect(prompt).toContain('## 项目预设');
     expect(prompt).toContain('所有金额字段统一用 BigInt 分单位');
   });
+
+  test('SP07 slim 后的 prompt 体积 ≤ 8KB (原 18KB)', () => {
+    // 核心目的: Step-Perf-1.1 的提速来自 prompt 瘦身, 回归防止未来再次膨胀
+    const emptyPrompt = buildSystemPrompt(emptyParams);
+    const withPresetPrompt = buildSystemPrompt({
+      ...emptyParams,
+      preset: {
+        content: JSON.stringify({ fieldNaming: 'snake_case', responseFormat: { success: true, data: null } }),
+      },
+    });
+    expect(Buffer.byteLength(emptyPrompt, 'utf8')).toBeLessThan(8000);
+    expect(Buffer.byteLength(withPresetPrompt, 'utf8')).toBeLessThan(8500);
+    // 指引 AI 用 get_module_template 按需拉样例,而不是把样例写死在 prompt 里
+    expect(emptyPrompt).toContain('get_module_template');
+    // 完整 todo 模板示例(120 行)应已移出,这些特征字符不能再出现在 prompt 里
+    expect(emptyPrompt).not.toContain('CREATE TABLE IF NOT EXISTS `mock__todo`');
+    expect(emptyPrompt).not.toContain("import { test, assert, request } from '@core/test-runner.js'");
+  });
 });

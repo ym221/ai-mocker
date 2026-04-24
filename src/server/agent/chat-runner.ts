@@ -23,6 +23,7 @@ import { buildTools } from './tool-registry.js';
 import { createCompatFetch } from './compat-fetch.js';
 import { ThinkingParser } from './thinking-adapter.js';
 import { buildProviderOptions, reportCacheSupport } from './prompt-cache.js';
+import { decideWatchdog, buildNudgeMessage } from './watchdog.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -714,18 +715,18 @@ export class ChatRunner {
       // Observable: surfaced in logs so users can verify cache is wired up
       try { console.log(`[prompt-cache] session=${this.sessionId} provider=${provider.type} note="${cacheReport.note}"`); } catch { /* ignore */ }
 
-      // ===== streamText =====
-      const result = streamText({
-        model,
-        system: systemPrompt + extraSystemSuffix,
-        messages: coreMessages,
-        tools,
-        stopWhen: stepCountIs(Number(process.env.CHAT_MAX_STEPS ?? 40)),
-        abortSignal: abortController.signal,
-        ...(providerOptions ? { providerOptions } : {}),
-      });
+      // ===== Stream consumer (extracted so we can re-run for watchdog nudge) =====
+      const consumeOneStream = async (messagesForThisAttempt: CoreMessage[]) => {
+        const result = streamText({
+          model,
+          system: systemPrompt + extraSystemSuffix,
+          messages: messagesForThisAttempt,
+          tools,
+          stopWhen: stepCountIs(Number(process.env.CHAT_MAX_STEPS ?? 40)),
+          abortSignal: abortController.signal,
+          ...(providerOptions ? { providerOptions } : {}),
+        });
 
-      try {
         for await (const part of safeFullStream(result.fullStream)) {
           if (abortController.signal.aborted) break;
 
@@ -788,8 +789,60 @@ export class ChatRunner {
             }
           }
         }
+      };
 
-        // flush residue from parser
+      // ===== Watchdog: don't let "done-but-empty" leak out =====
+      //
+      // When the LLM declared a moduleIntent (create/update) but finished the
+      // stream without calling any write_file/write_files tool, the module
+      // never actually hits disk — yet the session would previously finalize
+      // as `done`. That masks a real bug (the model got stuck thinking).
+      //
+      // Fix: re-issue the same stream with an explicit system-injected user
+      // nudge asking the model to write now. Try up to CHAT_NUDGE_MAX (default
+      // 2) times. If the model still produces zero writes, finalize as error
+      // with an actionable message, never as `done`.
+      //
+      // Rationale: matches "must be smooth" — MCP auto-resume already handles
+      // long runs, so the worst case is another full-duration retry rather
+      // than a silent failure.
+      const NUDGE_MAX = Math.max(0, Number(process.env.CHAT_NUDGE_MAX ?? 2));
+      const didWrite = () => {
+        for (const c of collectedToolCalls.values()) {
+          if (c.name === 'write_file' || c.name === 'write_files') return true;
+        }
+        return false;
+      };
+      const currentWatchdogState = (nudgesIssued: number) => ({
+        moduleIntentOp: this.moduleIntent?.operation,
+        hasWriteCall: didWrite(),
+        nudgesIssued,
+        maxNudge: NUDGE_MAX,
+      });
+
+      try {
+        await consumeOneStream(coreMessages);
+
+        // Watchdog nudge loop. decideWatchdog() returns proceed/nudge/fail.
+        let nudgesIssued = 0;
+        while (true) {
+          if (abortController.signal.aborted) break;
+          const action = decideWatchdog(currentWatchdogState(nudgesIssued));
+          if (action.kind === 'proceed' || action.kind === 'fail') break;
+          // action.kind === 'nudge'
+          this.appendEvent('thinking', {
+            content: `[framework] watchdog nudge ${action.attempt}/${action.total} — model declared intent without writing any file; re-prompting`,
+          });
+          const nudgeText = buildNudgeMessage(
+            this.moduleIntent!.operation as 'create' | 'update',
+            this.moduleIntent!.moduleName
+          );
+          coreMessages.push({ role: 'user', content: nudgeText });
+          nudgesIssued = action.attempt;
+          await consumeOneStream(coreMessages);
+        }
+
+        // flush residue from parser (one final time after possibly-multiple streams)
         for (const ch of parser.flush()) {
           if (ch.type === 'thinking') this.bufferThinking(ch.content);
           else if (ch.type === 'text') {
@@ -805,6 +858,16 @@ export class ChatRunner {
 
         // persist assistant content snapshot to messages.content (for history rehydration)
         const finalText = assistantAccText.join('');
+
+        // Final decision — never silently succeed if watchdog says fail.
+        const finalAction = decideWatchdog(currentWatchdogState(nudgesIssued));
+        if (finalAction.kind === 'fail') {
+          sqlite.prepare(`UPDATE messages SET content = ?, message_error = ? WHERE id = ?`)
+            .run(finalText, finalAction.message, this.currentMessageId!);
+          this.finalize('error', { message: finalAction.message });
+          return;
+        }
+
         sqlite.prepare(`UPDATE messages SET content = ? WHERE id = ?`)
           .run(finalText, this.currentMessageId!);
 

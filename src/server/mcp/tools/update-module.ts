@@ -12,6 +12,7 @@ import { snapshotMeta, diffSnapshots } from '../lib/update-diff.js';
 import { buildUpdateUserContent, extractUpdateInstruction } from '../lib/instruction-utils.js';
 import { MCP_ERROR_CODES, mcpError } from '../lib/error-codes.js';
 import { runWriteTool } from '../lib/write-tool-runner.js';
+import { humanizeStage } from '../lib/stage-humanize.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -128,8 +129,8 @@ export function registerUpdateModuleTool(server: McpServer): void {
         },
 
         buildStillRunningResponse: ({ result, attached, driftWarning, actualInstruction }) => {
-          const text = `Module "${moduleName}" is still updating (elapsed ${result.elapsedSec ?? '?'}s, stage=${result.stage ?? 'unknown'}, session=${result.sessionId}). `
-            + `Call update_module(${JSON.stringify({ moduleName })}, ...) again with the same arguments to auto-resume.`;
+          const info = humanizeStage(result.stage);
+          const text = `模块 "${moduleName}" ${info.description}(已用 ${result.elapsedSec ?? '?'}s, session=${result.sessionId})。预计再 ~${info.expectedRemainingSec}s 可完成 — 重新调用相同参数即自动续接。`;
           return {
             content: [{ type: 'text', text }],
             structuredContent: {
@@ -138,9 +139,12 @@ export function registerUpdateModuleTool(server: McpServer): void {
               sessionId: result.sessionId,
               attached,
               stage: result.stage,
+              stageDescription: info.description,
               elapsedSec: result.elapsedSec,
+              expectedRemainingSec: info.expectedRemainingSec,
               lastEventSeq: result.lastEventSeq,
               hint: 'Call update_module again with the same arguments to auto-resume. Use get_session_status(sessionId) for a live snapshot, or cancel_session(sessionId) to abort.',
+              suggestedNextAction: info.suggestedNextAction,
               ...(attached && actualInstruction != null ? { actualInstruction } : {}),
               ...(attached ? { yourInstruction: instruction } : {}),
               ...(driftWarning ? { warning: driftWarning } : {}),

@@ -6,6 +6,7 @@ import { sessions } from '../../core/schema.js';
 import { getMcpUser } from '../context.js';
 import { getSessionSnapshot } from '../lib/headless-session.js';
 import { MCP_ERROR_CODES, mcpError } from '../lib/error-codes.js';
+import { humanizeStage } from '../lib/stage-humanize.js';
 
 export function registerGetSessionStatusTool(server: McpServer): void {
   server.registerTool(
@@ -53,10 +54,11 @@ export function registerGetSessionStatusTool(server: McpServer): void {
         });
       }
 
+      const info = humanizeStage(snap.stage);
       return {
         content: [{
           type: 'text',
-          text: `Session ${snap.sessionId} — status=${snap.status}, stage=${snap.stage}, elapsed=${snap.elapsedSec ?? '?'}s, lastEventSeq=${snap.lastEventSeq}`,
+          text: `会话 ${snap.sessionId} — 状态 ${snap.status}, ${info.description}, 已用 ${snap.elapsedSec ?? '?'}s (seq=${snap.lastEventSeq})`,
         }],
         structuredContent: {
           sessionId: snap.sessionId,
@@ -64,7 +66,9 @@ export function registerGetSessionStatusTool(server: McpServer): void {
           moduleName: snap.moduleName,
           title: snap.title,
           stage: snap.stage,
+          stageDescription: info.description,
           elapsedSec: snap.elapsedSec,
+          expectedRemainingSec: snap.status === 'running' ? info.expectedRemainingSec : 0,
           lastEventSeq: snap.lastEventSeq,
           recentEvents: snap.recentEvents.map((e) => ({
             seq: e.seq,
@@ -73,6 +77,7 @@ export function registerGetSessionStatusTool(server: McpServer): void {
             payloadSummary: summarizePayload(e.type, e.payload),
           })),
           errorMessage: snap.errorMessage,
+          suggestedNextAction: snap.status === 'running' ? info.suggestedNextAction : null,
         },
       };
     }

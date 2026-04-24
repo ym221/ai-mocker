@@ -26,6 +26,7 @@ import { findInFlightSession } from './in-flight-lock.js';
 import { tryAcquire, release } from './concurrency-gate.js';
 import { instructionsDiffer } from './instruction-utils.js';
 import { MCP_ERROR_CODES, mcpError } from './error-codes.js';
+import { humanizeStage } from './stage-humanize.js';
 
 const DEFAULT_WAIT_MAX_SEC = 60;
 const MAX_WAIT_MAX_SEC = 300;
@@ -113,12 +114,16 @@ export function makeProgressSender(extra: any) {
   return async (p: HeadlessProgress) => {
     if (!sendNotification || !progressToken) return;
     try {
+      // Humanize the stage for the MCP client (AI sees friendly phrase + raw stage)
+      const toolName = (p.detail as any)?.tool as string | undefined;
+      const rawStage = p.stage === 'tool' && toolName ? `tool:${toolName}` : p.stage;
+      const { description } = humanizeStage(rawStage);
       await sendNotification({
         method: 'notifications/progress',
         params: {
           progressToken,
           progress: p.seq,
-          message: `${p.stage}${p.detail ? ': ' + JSON.stringify(p.detail) : ''}`,
+          message: description,
         },
       });
     } catch { /* ignore */ }

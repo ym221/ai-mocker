@@ -197,7 +197,10 @@ export default async function mockRouter(app: FastifyInstance) {
       const query = request.query as Record<string, string>;
       const body = request.body as Record<string, unknown>;
 
-      const result = mockContext.run({ userId }, () => {
+      // Controllers may be sync OR async; await unconditionally so the response
+      // processing below (statusCode/__mock__ extraction) sees the resolved value,
+      // never a Promise. Sync controllers are untouched by `await` on non-Promises.
+      const result = await mockContext.run({ userId }, () => {
         // Preferred: explicit named controller export (multi-entity modules).
         // _meta.endpoints[].controller = "listItems" → ctrl.listItems({ body, query, params })
         const namedHandler = matchedEndpoint!.controller;

@@ -7,8 +7,9 @@
  */
 
 export interface WatchdogState {
-  /** Value of the last set_module_intent call; undefined means no intent declared. */
-  moduleIntentOp?: 'create' | 'update' | 'none';
+  /** Value of the last set_module_intent call; undefined means no intent declared.
+   *  Accepts both 'update' (MCP-originated) and 'edit' (Web UI set_module_intent tool) — both imply file-writing work. */
+  moduleIntentOp?: 'create' | 'update' | 'edit' | 'none';
   /** Whether the current turn emitted a write_file OR write_files tool call. */
   hasWriteCall: boolean;
   /** Number of nudges already issued in this turn (0 on first check). */
@@ -23,7 +24,10 @@ export type WatchdogAction =
   | { kind: 'fail'; message: string };                      // finalize('error'), never silent-done
 
 export function decideWatchdog(s: WatchdogState): WatchdogAction {
-  const mustWrite = s.moduleIntentOp === 'create' || s.moduleIntentOp === 'update';
+  const mustWrite =
+    s.moduleIntentOp === 'create'
+    || s.moduleIntentOp === 'update'
+    || s.moduleIntentOp === 'edit';
 
   // Regular chat or declared none → no gate, proceed.
   if (!mustWrite) return { kind: 'proceed' };
@@ -56,7 +60,7 @@ export function decideWatchdog(s: WatchdogState): WatchdogAction {
  * in case write_files schema trips the model.
  */
 export function buildNudgeMessage(
-  operation: 'create' | 'update',
+  operation: 'create' | 'update' | 'edit',
   moduleName: string
 ): string {
   return (

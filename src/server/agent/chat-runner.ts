@@ -834,7 +834,7 @@ export class ChatRunner {
             content: `[framework] watchdog nudge ${action.attempt}/${action.total} — model declared intent without writing any file; re-prompting`,
           });
           const nudgeText = buildNudgeMessage(
-            this.moduleIntent!.operation as 'create' | 'update',
+            this.moduleIntent!.operation as 'create' | 'update' | 'edit',
             this.moduleIntent!.moduleName
           );
           coreMessages.push({ role: 'user', content: nudgeText });

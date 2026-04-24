@@ -80,7 +80,18 @@ export class BaseModel {
     try {
       const meta = normalizeMeta(JSON.parse(readFileSync(metaPath, 'utf-8')));
       const entities = getEntities(meta);
-      const matched = entities.find(e => e.tableName === this.baseTableName) || entities[0];
+      // Forgiving match: accept any of
+      //   new BaseModel('mock__Item')  → tableName exact
+      //   new BaseModel('Item')         → entity.name exact (bare form)
+      //   new BaseModel('Item')         → "mock__Item" === entity.tableName
+      // This unsticks multi-entity AI-generated controllers that pass bare entity names.
+      const bare = this.baseTableName.replace(/^mock__/, '');
+      const matched = entities.find(e =>
+        e.tableName === this.baseTableName
+        || e.tableName === `mock__${this.baseTableName}`
+        || e.name === this.baseTableName
+        || e.name === bare
+      ) || entities[0];
       if (matched) this.boundEntity = matched;
     } catch { /* malformed meta — silently skip validation */ }
     return this;
@@ -238,8 +249,9 @@ export class BaseModel {
     return this.findById(result.lastInsertRowid as number)!;
   }
 
-  update(id: number, data: Record<string, unknown>): Record<string, unknown> {
+  update(id: number | string, data: Record<string, unknown>): Record<string, unknown> {
     const tableName = this.getTableName();
+    const numId = typeof id === 'string' ? Number(id) : id;
     const cleanData = { ...data };
 
     // Remove system fields — don't update these
@@ -250,7 +262,7 @@ export class BaseModel {
     // Auto-validate (partial-merge with existing row so cross-field rules see
     // the post-update state, not just the patch fragment)
     if (this.boundEntity) {
-      const existing = this.findById(id);
+      const existing = this.findById(numId);
       this.maybeValidate(cleanData, 'update', existing);
     }
 
@@ -261,9 +273,9 @@ export class BaseModel {
     const values = Object.values(cleanData).map(normalizeBindValue);
 
     const sql = `UPDATE \`${tableName}\` SET ${setClauses} WHERE id = ?`;
-    sqlite.prepare(sql).run(...values, id);
+    sqlite.prepare(sql).run(...values, numId);
 
-    return this.findById(id)!;
+    return this.findById(numId)!;
   }
 
   delete(id: number): boolean {
@@ -282,5 +294,34 @@ export class BaseModel {
 
   raw(sql: string, params: unknown[] = []): unknown[] {
     return sqlite.prepare(sql).all(...params);
+  }
+
+  // ==================== Outward-facing aliases (Step-Fix-1.6) ====================
+  //
+  // mock-router dispatches to controller exports named list/getById/create/update/remove
+  // (the outward HTTP-layer convention). When controllers delegate to BaseModel,
+  // AI-generated code frequently mirrors that same naming on BaseModel itself
+  // (e.g. `model.list(req.query)` / `model.getById(req.params.id)` / `model.remove(id)`).
+  //
+  // Historically BaseModel only exposed inward DB-style names (findAll/findById/delete),
+  // so those AI-generated controllers 500'd at first request. Adding the aliases makes
+  // BaseModel accept both conventions, eliminating an entire class of generation errors
+  // without touching the single-entity helper module that uses findAll/findById/delete.
+
+  /** Alias for findAll — accepts the same options, returns the same { list, total, page, pageSize }. */
+  list(options: FindAllOptions = {}): FindAllResult {
+    return this.findAll(options);
+  }
+
+  /** Alias for findById — accepts number or numeric string (URL params). */
+  getById(id: number | string): Record<string, unknown> | null {
+    const n = typeof id === 'string' ? Number(id) : id;
+    return this.findById(n);
+  }
+
+  /** Alias for delete — accepts number or numeric string. */
+  remove(id: number | string): boolean {
+    const n = typeof id === 'string' ? Number(id) : id;
+    return this.delete(n);
   }
 }

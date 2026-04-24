@@ -2,7 +2,7 @@
 
 ## 当前位置
 - **Phase**: ALL COMPLETE
-- **状态**: Step-Perf-1 完成（system prompt 18KB→7KB + batch write_files + prompt caching + 并行 tool mutex + 14→12 MCP 工具合并 + write-tool-runner 抽象 + module-repo + recovery_steps + humanized progress）
+- **状态**: Step-Perf-2 完成(修复 Step-Perf-1 在小模型上的 bug — 恢复 write_file、default waitMaxSec 60→180s、stepCountIs 20→40、真实 LLM E2E 验收门槛)
 
 ## 已完成 Step
 - [x] Step 1: 项目初始化 (d759059)
@@ -34,6 +34,7 @@
 - [x] **Step-MCP-4**: 元数据约束建模 + OpenAPI 映射 + 强 diff — _meta.json 字段约束 (enum/min/max/pattern/unique) + entity.constraints 跨字段规则 + openapi-export 全面映射 + BaseModel.withMeta() auto-validate + diff_with_openapi constraint-violation/cross-field-violation + update_module 富 diff
 - [x] **Step-MCP-5**: 单模块单流程 + 自动续接 + 并发约束 — runHeadlessSession 拆分 start+attach、write 工具 waitMaxSec + onConflict=resume、新增 get_session_status + cancel_session(12→14 工具)、concurrency gate(per-user 3 / global 10)、30s heartbeat keepalive、统一错误码 + hint
 - [x] **Step-Perf-1**: AI 生成提速 + 工具表面简化 + UX 打磨 — system prompt 18KB→7KB(模板外置 get_module_template)、batch write_files 替代 write_file 单文件(6 次 LLM→1 次)、provider-aware prompt caching(Anthropic + OpenAI-compat 前缀稳定)、per-session mutex + 并行读、14→12 MCP 工具(inspect_module 合并 doc+openapi+health)、write-tool-runner 抽象消除 update/create 70% 同构、module-repo 集中 DB+fs 查询、error recovery_steps(machine-actionable 下一步工具)、humanized stage + expectedRemainingSec + suggestedNextAction
+- [x] **Step-Perf-2**: 真实 LLM 实测暴露的 Bug 修复 + 测试覆盖补齐 — 恢复 write_file 单文件工具(弱模型退回路径)、write_files 空 args 返更明确错误并引导退回、default waitMaxSec 60→180s(对齐真实 LLM 延迟)、stepCountIs 20→40(给真实生成足够步数)、新增 `tests/real-llm-e2e.spec.ts` 真实 gemma 端到端 E2E(RLM-01~04 作为硬验收门槛,以后不依赖用户手测)
 
 ## Step-Chat-Resumable 变更摘要
 计划文档: `plans/STEP-CHAT-RESUMABLE-PLAN.md`
@@ -468,5 +469,28 @@
 | update-module.ts + create-module-from-spec.ts 总行数 | 755 | 382(+ runner 283) |
 | 回归测试数 | 430+ | 470+(全绿,新增 40+) |
 
+## Step-Perf-2 变更摘要
+计划文档:`plans/STEP-PERF-2-PLAN.md`
+
+### 起因(用户 Cursor 实测暴露)
+用户用 Cursor + gemma-4-31b 实测 `create_module_from_spec`,任务悬挂 1 小时没生成模块。查 DB 事件清单发现:6 次 `write_files` tool_call 的 args 都是空对象 `{}`,AI 反复失败循环。根因是 Step-Perf-1.2 删除了 `write_file` 单文件工具,只保留 `write_files` 的**嵌套数组 schema**,gemma-31B 小模型无法正确填充该 schema。同时我的所有 Step-Perf-1 测试都用 `__fake__` 跳过真实 LLM,完全没覆盖这条路径。
+
+### 核心修复(5 Task)
+- **P2.1 恢复 `write_file`**(`agent/tool-registry.ts` + `agent/system-prompt.ts`):保留 `write_files`(快通道),并行再注册 `write_file`(弱模型退回);system-prompt 按模型能力引导 AI 选择,新增硬规则 "若 write_files 返 'no files provided' 立即切 write_file"
+- **P2.2 write_files 空 args 错误优化**(`agent/tools/write-files.ts`):错误 message 明确教 AI 正确 schema + 指向 write_file 退回;错误 error 字段含 "switch to write_file" 关键词便于日志统计
+- **P2.4 default waitMaxSec 60→180s**(`mcp/lib/write-tool-runner.ts`):对齐真实 LLM round-trip 节奏(30-90s),避免 60s 几乎必定触发 still-running 导致客户端无谓重发
+- **P2.3 real-LLM E2E 验收门槛**(`tests/real-llm-e2e.spec.ts`,新):RLM-01~04 用真实 gemma 跑 create/update/manage_data/inspect_module 全链路;RLM-01 作为 Step-Perf-2 硬验收(不绿就不算完成);以后不依赖用户手测
+- **bonus:stopWhen stepCountIs 20→40**(`CHAT_MAX_STEPS` env 可调):真实 LLM 经常要 25-35 步才收敛(edit → test fail → fix SQL → fix controller → re-test);20 步不够,40 足够
+
+### 测试
+- RLM-01 真跑 gemma 端到端:首次 6.9min 通过,5 个核心文件落盘(_meta.json + schema.sql + controller.ts + test.ts + seed.sql),/mock/rlm_warehouse 可访问
+- WF06 更新断言新引导消息
+- 非真实 LLM 回归(34 条关键套件):全绿
+
+### 教训
+- **测试不能只用 mock**:__fake__ 跳过 AI tool-call 解析,完全绕过 schema 能力检测
+- **简化 ≠ 删除**:Step-Perf-1.2 删 write_file 是过度冒进,忽略了模型差异
+- **@real-llm 这类硬验收门槛必须存在**:以后所有涉及 tool schema 改动的 Task 都必须跑一次真实 LLM E2E
+
 ## 下一步
-Step-Perf-1 完成。若真实 LLM 实测后仍有优化需求,备选 Step-Perf-2:sampling(MCP 协议反向问 client AI 减少 round-trip)、模块生成结果缓存、thinking 预算自适应、stdio transport、细粒度权限 Key。
+Step-Perf-1 + Step-Perf-2 完成。若用户真实 LLM 实测仍有问题,备选 Step-Perf-3:模型能力探测(首次失败自动 fallback)、模块生成结果缓存、sampling、thinking 预算自适应。

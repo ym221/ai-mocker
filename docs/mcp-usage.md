@@ -632,7 +632,22 @@ AI 若同一轮 emit 多个 tool-call:
 
 ---
 
-## 16. 路线图
+## 16. 模型选型建议 (Step-Perf-2)
+
+MockForge 的 Agent tool schema 包含嵌套数组(如 `write_files({ files: [...]})`)。不同模型对嵌套 schema 的填充能力差异巨大:
+
+| 模型 | write_files 能力 | 推荐用法 |
+|-----|-----------------|---------|
+| Claude Sonnet / Opus | ✅ 稳定 | 直接用 write_files 批量写 |
+| GPT-4 / GPT-4o | ✅ 稳定 | 直接用 write_files 批量写 |
+| Gemini Pro 1.5+ | ✅ 多数场景 | 直接用 write_files |
+| DeepSeek V2 big | ✅ 稳定 | 直接用 write_files |
+| **gemma-4-31B / DeepSeek small** | ⚠️ 易失败 | AI 会自动退回 write_file 单文件写 |
+| **Qwen 7B / 小型本地模型** | ❌ 不推荐 | 可能完全无法正确填任何 tool schema |
+
+系统已兼容弱模型:若 AI 调 `write_files` 拿到 "no files provided" 错误,会被提示切换 `write_file(path, content)` 单文件循环调用。虽然慢一些(5-6 次 LLM 往返代替 1 次),但能成功。
+
+## 17. 路线图
 
 | 版本 | 状态 | 能力 |
 |------|------|------|
@@ -641,7 +656,8 @@ AI 若同一轮 emit 多个 tool-call:
 | Step-MCP-3 | ✅ | mock-router 放权 + 规范决策硬规则 + provider/model/preset 覆盖 + Web UI 选择器 |
 | Step-MCP-4 | ✅ | _meta.json 约束建模 + OpenAPI 映射 + BaseModel auto-validate + diff 富化 |
 | Step-MCP-5 | ✅ | 单模块单流程 + 自动续接 + 并发 gate + heartbeat + 统一错误码 |
-| Step-Perf-1 | ✅(当前) | system prompt 瘦身 60% + batch write_files + prompt caching + 工具合并 14→12 + humanized 进度 + recovery_steps |
-| 未来 | — | Sampling(client 反向 AI)、模块生成结果缓存、thinking 预算自适应、stdio transport、细粒度 Key 权限、idempotency key |
+| Step-Perf-1 | ✅ | system prompt 瘦身 60% + batch write_files + prompt caching + 工具合并 14→12 + humanized 进度 + recovery_steps |
+| Step-Perf-2 | ✅(当前) | 恢复 write_file(弱模型退回) + default waitMaxSec 60→180s + stepCountIs 20→40 + 真实 LLM E2E 验收门槛 |
+| 未来 | — | 模型能力探测(自动 fallback)、模块生成结果缓存、sampling、thinking 预算自适应、细粒度 Key 权限 |
 
-更详细的设计和决策记录见 [`ANALYSIS-AI-DEV-WORKFLOW.md`](../ANALYSIS-AI-DEV-WORKFLOW.md) 和 `CURSOR.md` 的 Step-MCP-{1,2,3,4,5} / Step-Perf-1 章节。
+更详细的设计和决策记录见 [`ANALYSIS-AI-DEV-WORKFLOW.md`](../ANALYSIS-AI-DEV-WORKFLOW.md) 和 `CURSOR.md` 的 Step-MCP-{1,2,3,4,5} / Step-Perf-{1,2} 章节。

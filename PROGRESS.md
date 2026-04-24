@@ -8,7 +8,7 @@
 | 3 | 前端 — 对话 | ✅ 完成 |
 | 4 | 前端 — 模块管理 | ✅ 完成 |
 | 5 | 增强 | ✅ 完成 |
-| 6 | MCP 集成 | ✅ 完成（Step-MCP-1 + Step-MCP-2 + Step-MCP-3 + Step-MCP-4 + Step-MCP-5 + Step-Perf-1）|
+| 6 | MCP 集成 | ✅ 完成（Step-MCP-1 + Step-MCP-2 + Step-MCP-3 + Step-MCP-4 + Step-MCP-5 + Step-Perf-1 + Step-Perf-2）|
 
 ## Phase 1：项目基础
 
@@ -112,6 +112,24 @@
 - 新增 67 条测试 (meta-schema:9 + openapi-constraints:7 + validator:16 + base-model-validate:8 + diff-with-openapi-constraints:6 + update-module-richdiff:14 + warehouse-constraints e2e:7)
 - 关键回归 148 passed (api-data 13, mcp-server-v2 ex-LLM 25, mcp-warehouse-e2e 6, manage-data-resolve 2, mock-router-response 8, step-ux-polish-5 8, page-chat 23 + chat-resumable + page-modules + page-data-management + navigation + e2e-flows ≈86)
 - 详见 `CURSOR.md` 对应章节
+
+### Step-Perf-2: 真实 LLM 实测暴露的 Bug 修复 + 测试覆盖补齐 ✅
+起因:用户 Cursor 实测 gemma-4-31b 时,`create_module_from_spec` 挂起 1h 没生成模块。DB 事件清单暴露:AI 6 次调 write_files 都 `args:{}`,嵌套 schema 超出小模型能力,Step-Perf-1.2 删 write_file 是过度冒进。
+
+核心修复:
+- **P2.1 恢复 `write_file` 单文件工具**(`agent/tool-registry.ts`): write_files 保留快通道,write_file 是弱模型退回;prompt 指引 AI 按能力选择
+- **P2.2 空 args 错误引导**(`agent/tools/write-files.ts`): 明确告知 schema + 指向 write_file
+- **P2.4 default waitMaxSec 60→180s**(`mcp/lib/write-tool-runner.ts`): 对齐真实 LLM 延迟
+- **P2.3 真实 LLM E2E 验收门槛**(`tests/real-llm-e2e.spec.ts`,新): RLM-01~04 真跑 gemma 端到端;RLM-01 是硬验收门槛
+- **bonus**: `stopWhen: stepCountIs(20 → 40)` + `CHAT_MAX_STEPS` env,真实生成常要 25-35 步
+
+测试:
+- RLM-01 首次真跑 gemma 6.9min 通过,5 文件落盘 + /mock/rlm_warehouse 可访问
+- 非真实 LLM 回归(34 条关键套件): 全绿
+- WF06 更新断言新引导消息
+
+教训: 只用 __fake__ 不够;简化 ≠ 删除;涉及 tool schema 改动必须跑真实 LLM E2E
+- 详见 CURSOR.md 对应章节
 
 ### Step-Perf-1: AI 生成提速 + 工具表面简化 + UX 打磨 ✅
 - **system prompt 瘦身**(agent/system-prompt.ts + agent/templates/samples.ts + agent/tools/get-module-template.ts):18020B → 7274B; 模板外置到 get_module_template(kind) Agent 工具按需读

@@ -1,0 +1,8 @@
+订单中心模块。
+
+实体 Customer（客户）字段：id、name（字符串，必填）、email（字符串，唯一，必填）、phone（字符串）、tier（枚举：bronze/silver/gold，默认 bronze）。
+实体 Product（商品）字段：id、name（字符串，必填）、sku（字符串，唯一，必填）、price（数字 >=0，必填）、stock（整数 >=0，默认 0）。
+实体 Order（订单）字段：id、customer_id（外键）、order_no（字符串，唯一，必填）、status（枚举：pending/paid/shipped/cancelled，默认 pending）、total_amount（数字）、created_at。
+实体 OrderItem（订单明细）字段：id、order_id（外键）、product_id（外键）、quantity（整数 >0）、unit_price（数字）。
+
+四个实体标准 CRUD。响应统一结构 { success: true, data: ..., message: ... }。

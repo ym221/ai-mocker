@@ -1,0 +1,6 @@
+极简商城模块。
+
+实体 Category（分类）字段：id、name（字符串，必填，唯一）、parent_id（整数，可空）、sort_order（整数，默认 0）。
+实体 Goods（商品）字段：id、name（字符串，必填）、category_id（外键，必填）、price（数字 >=0，必填）、stock（整数 >=0，默认 0）、is_on_sale（布尔，默认 true）。
+
+两实体标准 CRUD。响应 { success: true, data: ... }。

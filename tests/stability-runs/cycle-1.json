@@ -1,0 +1,57 @@
+{
+  "cycleId": "1",
+  "moduleName": "warehouse",
+  "ok": false,
+  "summary": "create error: code=MOCKFORGE_INTERNAL_ERROR msg=Generation session c1a87824-a9d7-4250-827a-a683d7ca4daa reached 'done' but module \"warehouse\" was not registered.",
+  "qualityClean": true,
+  "qualityFailureCount": 0,
+  "warningCount": 0,
+  "qualityFailures": [],
+  "warnings": [],
+  "totalDurationMs": 277290,
+  "failedStep": "4.create",
+  "steps": [
+    {
+      "name": "1.login",
+      "ok": true,
+      "durationMs": 196,
+      "detail": {
+        "durationMs": 196,
+        "apiKey": "mf_-Slff..."
+      }
+    },
+    {
+      "name": "2.cleanup",
+      "ok": true,
+      "durationMs": 49,
+      "detail": {
+        "durationMs": 49,
+        "ok": false,
+        "code": "MOCKFORGE_MODULE_NOT_FOUND",
+        "deleted": false
+      }
+    },
+    {
+      "name": "3.list_baseline",
+      "ok": true,
+      "durationMs": 22,
+      "detail": {
+        "durationMs": 22,
+        "totalModules": 2
+      }
+    },
+    {
+      "name": "4.create",
+      "ok": false,
+      "durationMs": 277019,
+      "detail": {
+        "durationMs": 277019
+      },
+      "error": "create error: code=MOCKFORGE_INTERNAL_ERROR msg=Generation session c1a87824-a9d7-4250-827a-a683d7ca4daa reached 'done' but module \"warehouse\" was not registered.",
+      "errorStack": "Error: create error: code=MOCKFORGE_INTERNAL_ERROR msg=Generation session c1a87824-a9d7-4250-827a-a683d7ca4daa reached 'done' but module \"warehouse\" was not registered.\n    at step4_create (file:///c:/Users/yinm2/Desktop/yinm/yinm-code/ai-mocker/tests/stability-runs/cycle.mjs:295:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async file:///c:/Users/yinm2/Desktop/yinm/yinm-code/ai-mocker/tests/stability-runs/cycle.mjs:759:22\n    at async file:///c:/Users/yinm2/Desktop/yinm/yinm-code/ai-mocker/tests/stability-runs/cycle.mjs:771:5",
+      "errorCause": null,
+      "errorCauseStack": null
+    }
+  ],
+  "timestamp": "2026-04-27T10:36:19.792Z"
+}

@@ -1,0 +1,6 @@
+仓储管理模块。
+
+实体 Warehouse（仓库）字段：id、name（字符串，必填）、code（字符串，唯一）、address（字符串）、manager（字符串）、status（枚举：active/inactive，默认 active）。
+实体 Item（物料）字段：id、sku（字符串，唯一，必填）、name（字符串，必填）、unit（字符串，默认 pcs）、unit_price（数字）。
+实体 InventoryRecord（库存）字段：id、warehouse_id（外键）、item_id（外键）、quantity（整数 >=0）、safety_stock（整数，默认 10）。
+三个实体标准 CRUD。响应统一结构 { code: 0, data: ... }。

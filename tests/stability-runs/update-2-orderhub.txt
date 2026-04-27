@@ -1,0 +1,6 @@
+给 Customer 实体加 vip_level 字段（integer，默认 0，非必填）。必须实际写文件：
+1. _meta.json 在 Customer 实体的 fields 末尾追加 { name:"vip_level", type:"integer", default:0 }
+2. schema.sql 重新 CREATE TABLE mock__Customer 时加 vip_level INTEGER DEFAULT 0
+3. api-doc.md 客户字段补 vip_level 说明
+4. test.ts 加 test("客户 vip_level 字段 CRUD") 创建 customer 带 vip_level 并断言读出值相等
+write_files / write_file 实际写入；禁止只读不写。

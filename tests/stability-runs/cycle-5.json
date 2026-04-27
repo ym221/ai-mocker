@@ -1,0 +1,68 @@
+{
+  "cycleId": "5",
+  "moduleName": "shopmini",
+  "ok": false,
+  "summary": "health not healthy: status=degraded missing=[\"controller.ts\",\"test.ts\",\"api-doc.md\"] hasTable=true metaValid=true",
+  "qualityClean": true,
+  "qualityFailureCount": 0,
+  "warningCount": 0,
+  "qualityFailures": [],
+  "warnings": [],
+  "totalDurationMs": 473988,
+  "failedStep": "5.inspect_health",
+  "steps": [
+    {
+      "name": "1.login",
+      "ok": true,
+      "durationMs": 214,
+      "detail": {
+        "durationMs": 214,
+        "apiKey": "mf_p0qW9..."
+      }
+    },
+    {
+      "name": "2.cleanup",
+      "ok": true,
+      "durationMs": 31,
+      "detail": {
+        "durationMs": 31,
+        "ok": false,
+        "code": "MOCKFORGE_MODULE_NOT_FOUND",
+        "deleted": false
+      }
+    },
+    {
+      "name": "3.list_baseline",
+      "ok": true,
+      "durationMs": 33,
+      "detail": {
+        "durationMs": 33,
+        "totalModules": 1
+      }
+    },
+    {
+      "name": "4.create",
+      "ok": true,
+      "durationMs": 473682,
+      "detail": {
+        "durationMs": 473682,
+        "attempts": 2,
+        "endpoints": 10,
+        "sessionId": "b0154135-dd70-46ed-bf4a-03e0561b140b"
+      }
+    },
+    {
+      "name": "5.inspect_health",
+      "ok": false,
+      "durationMs": 26,
+      "detail": {
+        "durationMs": 26
+      },
+      "error": "health not healthy: status=degraded missing=[\"controller.ts\",\"test.ts\",\"api-doc.md\"] hasTable=true metaValid=true",
+      "errorStack": "Error: health not healthy: status=degraded missing=[\"controller.ts\",\"test.ts\",\"api-doc.md\"] hasTable=true metaValid=true\n    at step5_inspectHealth (file:///c:/Users/yinm2/Desktop/yinm/yinm-code/ai-mocker/tests/stability-runs/cycle.mjs:310:11)\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async file:///c:/Users/yinm2/Desktop/yinm/yinm-code/ai-mocker/tests/stability-runs/cycle.mjs:759:22\n    at async file:///c:/Users/yinm2/Desktop/yinm/yinm-code/ai-mocker/tests/stability-runs/cycle.mjs:772:5",
+      "errorCause": null,
+      "errorCauseStack": null
+    }
+  ],
+  "timestamp": "2026-04-27T10:22:58.285Z"
+}

@@ -1,0 +1,6 @@
+给 Employee 加 email 字段（string，非必填，正则 ^[^@]+@[^@]+\.[^@]+$）。必须实际写文件：
+1. _meta.json Employee.fields 追加 { name:"email", type:"string", pattern:"^[^@]+@[^@]+\\.[^@]+$" }
+2. schema.sql 重建 mock__Employee 时加 email TEXT 列
+3. api-doc.md 员工字段补 email 说明
+4. test.ts 加 test("员工 email 字段 CRUD") 创建带合法 email 并断言相等
+write_files 或 write_file 实际写入；禁止只读不写。

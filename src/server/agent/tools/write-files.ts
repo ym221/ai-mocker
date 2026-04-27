@@ -229,35 +229,48 @@ export async function writeFiles(userId: number, input: WriteFilesInput): Promis
           }
         } else if (p.path.endsWith('_meta.json')) {
           try {
-            const meta = JSON.parse(p.content);
-            const moduleName = meta.name;
-            if (!moduleName) throw new Error('_meta.json missing "name" field');
+            // Path MUST be "<moduleName>/_meta.json"; reject bare "_meta.json".
+            const segments = p.path.split('/').filter(Boolean);
+            if (segments.length < 2 || segments[segments.length - 1] !== '_meta.json') {
+              throw new Error(`_meta.json must be written under a module dir, got "${p.path}"`);
+            }
+            const moduleName = segments[0];
+            if (!moduleName || moduleName === '_meta.json') {
+              throw new Error(`cannot derive moduleName from path "${p.path}"`);
+            }
+            let meta: Record<string, unknown>;
+            try { meta = JSON.parse(p.content); } catch (e) { throw new Error(`_meta.json invalid JSON: ${(e as Error).message}`); }
+
+            if (meta.name !== moduleName) {
+              meta.name = moduleName;
+              const repaired = JSON.stringify(meta, null, 2);
+              try { writeFileSync(p.fullPath, repaired, 'utf-8'); } catch { /* ignore re-write fail */ }
+            }
+
             const existing = db.select().from(modules)
               .where(and(eq(modules.name, moduleName), eq(modules.userId, userId)))
               .get();
             if (existing) {
               const preserveStatus = existing.status === 'creating' || existing.status === 'editing';
               const updateValues: Record<string, unknown> = {
-                displayName: meta.displayName || moduleName,
-                description: meta.description || '',
-                basePath: meta.basePath || `/mock/${moduleName}`,
+                displayName: (meta.displayName as string) || moduleName,
+                description: (meta.description as string) || '',
+                basePath: (meta.basePath as string) || `/mock/${moduleName}`,
                 updatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
               };
-              if (!preserveStatus) updateValues.status = meta.status || 'active';
+              if (!preserveStatus) updateValues.status = (meta.status as string) || 'active';
               db.update(modules).set(updateValues as any).where(eq(modules.id, existing.id)).run();
             } else {
               db.insert(modules).values({
                 name: moduleName,
                 userId,
-                displayName: meta.displayName || moduleName,
-                description: meta.description || '',
-                basePath: meta.basePath || `/mock/${moduleName}`,
-                status: meta.status || 'active',
+                displayName: (meta.displayName as string) || moduleName,
+                description: (meta.description as string) || '',
+                basePath: (meta.basePath as string) || `/mock/${moduleName}`,
+                status: (meta.status as string) || 'active',
               }).run();
             }
           } catch (err) {
-            // Parsing/sync failure is soft — historically write_file swallowed it.
-            // Keep same behavior: note on perFile, don't fail the whole batch.
             perFile[i].warnings = [...(perFile[i].warnings ?? []), `meta sync failed: ${(err as Error).message}`];
           }
         }

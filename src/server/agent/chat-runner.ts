@@ -461,12 +461,20 @@ export class ChatRunner {
   }
 
   /** Public hook invoked by set_module_intent tool. Reconciles intent with DB state. */
-  applyModuleIntent(userId: number, declared: { moduleName: string; operation: 'create' | 'edit' }): { moduleName: string; operation: 'create' | 'edit'; reconciled: boolean } {
+  applyModuleIntent(userId: number, declared: { moduleName: string; operation?: 'create' | 'edit' }): { moduleName: string; operation: 'create' | 'edit'; reconciled: boolean } {
     const { moduleName } = declared;
-    let operation = declared.operation;
+    let operation: 'create' | 'edit' | undefined = declared.operation;
     const existing = sqlite.prepare(`SELECT id, status FROM modules WHERE name = ? AND user_id = ?`)
       .get(moduleName, userId) as { id: number; status: string } | undefined;
     let reconciled = false;
+    // Some weak models call set_module_intent without the `operation` arg
+    // entirely; without a default, the watchdog can't see "must write" and
+    // the session may finalize with zero file writes (phantom-success).
+    // Default by presence of an existing module: existing → 'edit', else 'create'.
+    if (!operation) {
+      operation = existing ? 'edit' : 'create';
+      reconciled = true;
+    }
     if (operation === 'create' && existing) { operation = 'edit'; reconciled = true; }
     if (operation === 'edit' && !existing) { operation = 'create'; reconciled = true; }
     this.moduleIntent = { moduleName, operation };

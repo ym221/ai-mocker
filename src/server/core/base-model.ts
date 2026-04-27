@@ -246,7 +246,30 @@ export class BaseModel {
     const sql = `INSERT INTO \`${tableName}\` (${columns.map(c => `\`${c}\``).join(', ')}) VALUES (${placeholders})`;
     const result = sqlite.prepare(sql).run(...values);
 
-    return this.findById(result.lastInsertRowid as number)!;
+    // SQLite returns lastInsertRowid=0 (not the actual rowid) when the table's
+    // PRIMARY KEY isn't an INTEGER ROWID alias — the most common cause is
+    // `id TEXT PRIMARY KEY` without AUTOINCREMENT. In that case findById(0)
+    // returns null and the controller passes a null `data` to the wrap()
+    // helper, breaking every subsequent endpoint. Detect early and surface a
+    // clear, actionable error so the AI's run_test step fails loudly instead
+    // of silently producing 200 + null payloads.
+    const insertId = result.lastInsertRowid;
+    if (insertId == null || insertId === 0n || insertId === 0) {
+      throw new Error(
+        `BaseModel.create: insert into "${tableName}" returned no auto-incremented id `
+        + `(lastInsertRowid=${insertId}). Most likely schema.sql declares `
+        + `"id TEXT PRIMARY KEY" — change it to `
+        + `"id INTEGER PRIMARY KEY AUTOINCREMENT" and re-run.`
+      );
+    }
+    const created = this.findById(Number(insertId));
+    if (!created) {
+      throw new Error(
+        `BaseModel.create: row with id=${insertId} not found after INSERT. `
+        + `Check that the table's id column is INTEGER PRIMARY KEY AUTOINCREMENT.`
+      );
+    }
+    return created;
   }
 
   update(id: number | string, data: Record<string, unknown>): Record<string, unknown> {

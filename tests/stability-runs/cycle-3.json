@@ -1,0 +1,57 @@
+{
+  "cycleId": "3",
+  "moduleName": "blogmini",
+  "ok": false,
+  "summary": "create error: code=MOCKFORGE_INTERNAL_ERROR msg=Generation session e488ed31-92a9-444d-8b7a-1dca04105394 reached 'done' but module \"blogmini\" was not registered. The model produced no usable output.",
+  "qualityClean": true,
+  "qualityFailureCount": 0,
+  "warningCount": 0,
+  "qualityFailures": [],
+  "warnings": [],
+  "totalDurationMs": 100805,
+  "failedStep": "4.create",
+  "steps": [
+    {
+      "name": "1.login",
+      "ok": true,
+      "durationMs": 244,
+      "detail": {
+        "durationMs": 244,
+        "apiKey": "mf_-MlgS..."
+      }
+    },
+    {
+      "name": "2.cleanup",
+      "ok": true,
+      "durationMs": 26,
+      "detail": {
+        "durationMs": 26,
+        "ok": false,
+        "code": "MOCKFORGE_MODULE_NOT_FOUND",
+        "deleted": false
+      }
+    },
+    {
+      "name": "3.list_baseline",
+      "ok": true,
+      "durationMs": 33,
+      "detail": {
+        "durationMs": 33,
+        "totalModules": 0
+      }
+    },
+    {
+      "name": "4.create",
+      "ok": false,
+      "durationMs": 100499,
+      "detail": {
+        "durationMs": 100499
+      },
+      "error": "create error: code=MOCKFORGE_INTERNAL_ERROR msg=Generation session e488ed31-92a9-444d-8b7a-1dca04105394 reached 'done' but module \"blogmini\" was not registered. The model produced no usable output.",
+      "errorStack": "Error: create error: code=MOCKFORGE_INTERNAL_ERROR msg=Generation session e488ed31-92a9-444d-8b7a-1dca04105394 reached 'done' but module \"blogmini\" was not registered. The model produced no usable output.\n    at step4_create (file:///C:/Users/yinm2/Desktop/yinm/yinm-code/ai-mocker/tests/stability-runs/cycle.mjs:295:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async file:///C:/Users/yinm2/Desktop/yinm/yinm-code/ai-mocker/tests/stability-runs/cycle.mjs:759:22\n    at async file:///C:/Users/yinm2/Desktop/yinm/yinm-code/ai-mocker/tests/stability-runs/cycle.mjs:771:5",
+      "errorCause": null,
+      "errorCauseStack": null
+    }
+  ],
+  "timestamp": "2026-04-27T10:05:53.076Z"
+}

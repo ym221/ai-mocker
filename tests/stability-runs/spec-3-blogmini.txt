@@ -1,0 +1,5 @@
+极简博客模块（单实体）。
+
+实体 Post（文章）字段：id、title（字符串，必填，1-200 字符）、content（长文本）、author（字符串，默认 anonymous）、status（枚举：draft/published，默认 draft）、view_count（整数 >=0，默认 0）。
+
+只一个实体的标准 CRUD。响应 { code: 0, data: ... } 风格。

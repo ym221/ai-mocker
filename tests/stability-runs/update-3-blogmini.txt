@@ -1,0 +1,6 @@
+给 Post 实体加 tags 字段（string，非必填，逗号分隔标签）。必须实际写文件：
+1. _meta.json Post.fields 追加 { name:"tags", type:"string" }
+2. schema.sql 重建 mock__Post 时加 tags TEXT 列
+3. api-doc.md 字段说明里补 tags
+4. test.ts 加一条 test("Post tags 字段 CRUD") 创建 post 带 tags 并断言相等
+write_files 或 write_file 实际写入；禁止只读不写。

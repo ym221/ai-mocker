@@ -24,10 +24,12 @@ export type WatchdogAction =
   | { kind: 'fail'; message: string };                      // finalize('error'), never silent-done
 
 export function decideWatchdog(s: WatchdogState): WatchdogAction {
+  // Any non-empty moduleIntentOp indicates the AI declared module work — even
+  // if the operation arg was missing/null (some weak models drop it). Treat
+  // any declared intent except 'none' as obligating a file write.
   const mustWrite =
-    s.moduleIntentOp === 'create'
-    || s.moduleIntentOp === 'update'
-    || s.moduleIntentOp === 'edit';
+    s.moduleIntentOp != null && s.moduleIntentOp !== 'none' &&
+    String(s.moduleIntentOp).length > 0;
 
   // Regular chat or declared none → no gate, proceed.
   if (!mustWrite) return { kind: 'proceed' };

@@ -14,7 +14,11 @@
  */
 
 import { randomUUID } from 'crypto';
-import { sqlite } from '../../core/database.js';
+import { existsSync } from 'fs';
+import { join, resolve } from 'path';
+import { and, eq } from 'drizzle-orm';
+import { sqlite, db } from '../../core/database.js';
+import { modules } from '../../core/schema.js';
 import { ChatRunner } from '../../agent/chat-runner.js';
 import {
   startHeadlessSession,
@@ -202,6 +206,31 @@ export async function runWriteTool(ctx: WriteToolContext): Promise<any> {
       if (result.status !== 'done') {
         return defaultNonDone(ctx, { result, attached: true });
       }
+      // Phantom-success guard: registered + 5 files
+      if (ctx.toolKind === 'create' && ctx.moduleName) {
+        if (!moduleIsRegistered(ctx.userId, ctx.moduleName)) {
+          return mcpError({
+            code: MCP_ERROR_CODES.INTERNAL_ERROR,
+            message: `Generation session ${existingSessionId} reached 'done' but module "${ctx.moduleName}" was not registered (no _meta.json written).`,
+            hint: 'Retry with onConflict="replace" or switch to a stronger model.',
+            moduleName: ctx.moduleName,
+            sessionId: existingSessionId,
+            phantomSuccess: true,
+          });
+        }
+        const missing = listMissingFiles(ctx.userId, ctx.moduleName);
+        if (missing.length > 0) {
+          return mcpError({
+            code: MCP_ERROR_CODES.INTERNAL_ERROR,
+            message: `Generation session ${existingSessionId} reached 'done' but module "${ctx.moduleName}" is incomplete — missing files: ${missing.join(', ')}.`,
+            hint: 'Retry with onConflict="replace" to regenerate, or call update_module with explicit file-write instructions.',
+            moduleName: ctx.moduleName,
+            sessionId: existingSessionId,
+            phantomSuccess: true,
+            missingFiles: missing,
+          });
+        }
+      }
       return ctx.buildSuccessResponse({
         result, attached: true, driftWarning, actualInstruction, resolvedModuleName: ctx.moduleName,
       });
@@ -265,9 +294,60 @@ export async function runWriteTool(ctx: WriteToolContext): Promise<any> {
   if (result.status !== 'done') {
     return defaultNonDone(ctx, { result, attached: false });
   }
+  // Phantom-success guard: registered + 5 files
+  if (ctx.toolKind === 'create' && ctx.moduleName) {
+    if (!moduleIsRegistered(ctx.userId, ctx.moduleName)) {
+      return mcpError({
+        code: MCP_ERROR_CODES.INTERNAL_ERROR,
+        message: `Generation session ${sessionId} reached 'done' but module "${ctx.moduleName}" was not registered.`,
+        hint: 'Retry with onConflict="replace" or switch to a stronger model.',
+        moduleName: ctx.moduleName,
+        sessionId,
+        phantomSuccess: true,
+      });
+    }
+    const missing = listMissingFiles(ctx.userId, ctx.moduleName);
+    if (missing.length > 0) {
+      return mcpError({
+        code: MCP_ERROR_CODES.INTERNAL_ERROR,
+        message: `Generation session ${sessionId} reached 'done' but module "${ctx.moduleName}" is incomplete — missing files: ${missing.join(', ')}.`,
+        hint: 'Retry with onConflict="replace" or call update_module with explicit file-write instructions.',
+        moduleName: ctx.moduleName,
+        sessionId,
+        phantomSuccess: true,
+        missingFiles: missing,
+      });
+    }
+  }
   return ctx.buildSuccessResponse({
     result, attached: false, driftWarning: null, actualInstruction: null, resolvedModuleName: ctx.moduleName,
   });
+}
+
+/**
+ * Phantom-success guard (Round-2 finding).
+ *
+ * The model can finish a session with `runStatus='done'` while having produced
+ * zero meaningful output (no thinking, no tool_call) OR partial output (e.g.
+ * only 2 of 5 required files). Both cases used to return status:'created' to
+ * the caller, who then hit MODULE_NOT_FOUND or health=degraded downstream.
+ *
+ * Verify both: (a) module is registered in `modules` table, (b) all 5 required
+ * files exist on disk. Either failure → surface a clear error.
+ */
+function moduleIsRegistered(userId: number, moduleName: string): boolean {
+  const row = db.select()
+    .from(modules)
+    .where(and(eq(modules.userId, userId), eq(modules.name, moduleName)))
+    .get();
+  return !!row;
+}
+
+const REQUIRED_MODULE_FILES = ['_meta.json', 'schema.sql', 'controller.ts', 'test.ts', 'api-doc.md'];
+
+function listMissingFiles(userId: number, moduleName: string): string[] {
+  const dir = join(resolve('generated'), String(userId), moduleName);
+  return REQUIRED_MODULE_FILES.filter(f => !existsSync(join(dir, f)));
 }
 
 function defaultNonDone(ctx: WriteToolContext, args: NonDoneArgs): any {

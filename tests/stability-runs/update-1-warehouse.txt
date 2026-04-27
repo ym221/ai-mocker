@@ -1,0 +1,6 @@
+给 Warehouse 实体加 phone 字段（string，非必填）。必须写入：
+1. _meta.json entities[0].fields 末尾追加 { name:"phone", type:"string" }
+2. schema.sql 重新 CREATE TABLE mock__Warehouse 时加 phone TEXT 列
+3. api-doc.md 仓库字段说明里补 phone
+4. test.ts 加一条 test("仓库 phone 字段 CRUD") POST /warehouses 带 phone 然后 GET /warehouses/:id 断言 phone 相等
+write_files 或 write_file 实际写入，禁止只读不写。

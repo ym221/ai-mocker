@@ -1,0 +1,6 @@
+给 Goods 加 description 字段（string，非必填，长文本）。必须实际写文件：
+1. _meta.json Goods.fields 追加 { name:"description", type:"text" }
+2. schema.sql 重建 mock__Goods 时加 description TEXT 列
+3. api-doc.md 商品字段补 description 说明
+4. test.ts 加 test("Goods description 字段 CRUD") 创建带描述并断言读取相等
+write_files 或 write_file 实际写入；禁止只读不写。

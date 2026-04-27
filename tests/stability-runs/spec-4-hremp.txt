@@ -1,0 +1,8 @@
+人事员工模块（带丰富约束）。
+
+实体 Department（部门）字段：id、name（字符串，必填，2-50 字符）、code（字符串，必填，唯一，正则 ^[A-Z]{2,5}$）、manager_id（整数）。
+实体 Employee（员工）字段：id、name（字符串，必填）、employee_no（字符串，唯一，必填，正则 ^EMP\d{4,6}$）、department_id（外键，必填）、age（整数 18-65）、salary（数字 >=0）、status（枚举：active/leave/terminated，默认 active）、joined_at。
+
+约束：terminated 状态的员工 salary 必须为 0（跨字段）。
+
+两个实体标准 CRUD。响应 { code: 0, data: ..., message: ok }。

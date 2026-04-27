@@ -165,7 +165,10 @@ controller 里 \`new BaseModel(table).withMeta(moduleName)\` 自动接管所有 
 ## 契约硬规则(违反任一条 = 生成失败)
 
 1. **5 文件齐全**:\`_meta.json\` \`schema.sql\` \`controller.ts\` \`test.ts\` \`api-doc.md\` — 缺一即失败
-2. **schema.sql 时间戳列必填**:每张表必须含 \`created_at TEXT DEFAULT CURRENT_TIMESTAMP\` 和 \`updated_at TEXT DEFAULT CURRENT_TIMESTAMP\`(BaseModel.update 自动写 updated_at,缺列会运行时报错)
+2. **schema.sql 主键 + 时间戳列必填**:每张表必须含
+   - \`id INTEGER PRIMARY KEY AUTOINCREMENT\` (**禁止** \`TEXT PRIMARY KEY\` —— 会让 INSERT 拿不到自增 id,findById 返回 null,所有 CRUD 测试连续失败)
+   - \`created_at TEXT DEFAULT CURRENT_TIMESTAMP\`
+   - \`updated_at TEXT DEFAULT CURRENT_TIMESTAMP\` (BaseModel.update 自动写 updated_at,缺列运行时报错)
 3. **_meta.json 实体入口唯一**:所有实体写进 \`entities: [...]\` 数组。**禁用**顶层 \`entity\` 字段(老格式,框架已移除此路径)。\`entities[i].tableName === "mock__" + entities[i].name\`;\`schema.sql\` 的 CREATE TABLE 表名 === entity.tableName(系统自动注入 userId 前缀)
 4. **endpoints.type** 必须是 list/detail/create/update/delete/custom 之一;\`path\` 不加模块名前缀
 5. **controller 导出(单实体)**:命名导出 \`list/getById/create/update/remove\`,不可 default export

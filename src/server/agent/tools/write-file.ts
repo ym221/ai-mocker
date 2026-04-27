@@ -175,38 +175,62 @@ export async function writeFile(userId: number, path: string, content: string): 
     }
   }
 
-  // Auto-sync _meta.json to modules table
+  // Auto-sync _meta.json to modules table.
+  // Path is authoritative for moduleName (extracted from "<moduleName>/_meta.json").
+  // AI sometimes omits the top-level `name` field — we still register correctly
+  // and rewrite the file with the derived name so subsequent reads stay consistent.
   if (path.endsWith('_meta.json')) {
     try {
-      const meta = JSON.parse(content);
-      const moduleName = meta.name;
+      // Path MUST be "<moduleName>/_meta.json". Reject bare "_meta.json".
+      const segments = path.split('/').filter(Boolean);
+      if (segments.length < 2 || segments[segments.length - 1] !== '_meta.json') {
+        throw new Error(`_meta.json must be written under a module dir, got "${path}"`);
+      }
+      const moduleName = segments[0];
+      if (!moduleName || moduleName === '_meta.json') {
+        throw new Error(`cannot derive moduleName from path "${path}"`);
+      }
+      let meta: Record<string, unknown>;
+      try { meta = JSON.parse(content); } catch (e) { throw new Error(`_meta.json invalid JSON: ${(e as Error).message}`); }
+
+      // Inject missing `name` so future reads (openapi-export / inspect_module / etc.)
+      // see a consistent meta object. Persist back to disk if we changed it.
+      let metaPatched = false;
+      if (meta.name !== moduleName) {
+        meta.name = moduleName;
+        metaPatched = true;
+      }
+      if (metaPatched) {
+        const repaired = JSON.stringify(meta, null, 2);
+        try { writeFileSync(fullPath, repaired, 'utf-8'); } catch { /* fs already wrote; ignore re-write fail */ }
+      }
+
       const existing = db.select().from(modules)
         .where(and(eq(modules.name, moduleName), eq(modules.userId, userId)))
         .get();
 
       if (existing) {
-        // Preserve transient 'creating'/'editing' status — finalize() will flip to 'active'
         const preserveStatus = existing.status === 'creating' || existing.status === 'editing';
         const updateValues: Record<string, unknown> = {
-          displayName: meta.displayName || moduleName,
-          description: meta.description || '',
-          basePath: meta.basePath || `/mock/${moduleName}`,
+          displayName: (meta.displayName as string) || moduleName,
+          description: (meta.description as string) || '',
+          basePath: (meta.basePath as string) || `/mock/${moduleName}`,
           updatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
         };
-        if (!preserveStatus) updateValues.status = meta.status || 'active';
+        if (!preserveStatus) updateValues.status = (meta.status as string) || 'active';
         db.update(modules).set(updateValues as any).where(eq(modules.id, existing.id)).run();
       } else {
         db.insert(modules).values({
           name: moduleName,
           userId,
-          displayName: meta.displayName || moduleName,
-          description: meta.description || '',
-          basePath: meta.basePath || `/mock/${moduleName}`,
-          status: meta.status || 'active',
+          displayName: (meta.displayName as string) || moduleName,
+          description: (meta.description as string) || '',
+          basePath: (meta.basePath as string) || `/mock/${moduleName}`,
+          status: (meta.status as string) || 'active',
         }).run();
       }
-    } catch {
-      // Non-critical: meta sync failed but file was written
+    } catch (err) {
+      console.warn(`[write-file] _meta.json sync failed for ${path}:`, (err as Error).message);
     }
   }
 

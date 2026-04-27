@@ -1,0 +1,57 @@
+{
+  "cycleId": "2",
+  "moduleName": "orderhub",
+  "ok": false,
+  "summary": "create error: code=MOCKFORGE_INTERNAL_ERROR msg=Generation session 9d5d7eee-e442-44ce-8351-5eb1004bd907 reached 'done' but module \"orderhub\" was not registered. The model produced no usable output.",
+  "qualityClean": true,
+  "qualityFailureCount": 0,
+  "warningCount": 0,
+  "qualityFailures": [],
+  "warnings": [],
+  "totalDurationMs": 51681,
+  "failedStep": "4.create",
+  "steps": [
+    {
+      "name": "1.login",
+      "ok": true,
+      "durationMs": 184,
+      "detail": {
+        "durationMs": 184,
+        "apiKey": "mf_5cBw4..."
+      }
+    },
+    {
+      "name": "2.cleanup",
+      "ok": true,
+      "durationMs": 56,
+      "detail": {
+        "durationMs": 56,
+        "ok": false,
+        "code": "MOCKFORGE_MODULE_NOT_FOUND",
+        "deleted": false
+      }
+    },
+    {
+      "name": "3.list_baseline",
+      "ok": true,
+      "durationMs": 37,
+      "detail": {
+        "durationMs": 37,
+        "totalModules": 0
+      }
+    },
+    {
+      "name": "4.create",
+      "ok": false,
+      "durationMs": 51399,
+      "detail": {
+        "durationMs": 51399
+      },
+      "error": "create error: code=MOCKFORGE_INTERNAL_ERROR msg=Generation session 9d5d7eee-e442-44ce-8351-5eb1004bd907 reached 'done' but module \"orderhub\" was not registered. The model produced no usable output.",
+      "errorStack": "Error: create error: code=MOCKFORGE_INTERNAL_ERROR msg=Generation session 9d5d7eee-e442-44ce-8351-5eb1004bd907 reached 'done' but module \"orderhub\" was not registered. The model produced no usable output.\n    at step4_create (file:///C:/Users/yinm2/Desktop/yinm/yinm-code/ai-mocker/tests/stability-runs/cycle.mjs:295:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async file:///C:/Users/yinm2/Desktop/yinm/yinm-code/ai-mocker/tests/stability-runs/cycle.mjs:759:22\n    at async file:///C:/Users/yinm2/Desktop/yinm/yinm-code/ai-mocker/tests/stability-runs/cycle.mjs:771:5",
+      "errorCause": null,
+      "errorCauseStack": null
+    }
+  ],
+  "timestamp": "2026-04-27T09:58:36.252Z"
+}

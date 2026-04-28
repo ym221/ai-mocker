@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' http://localhost:3000/api/health)",
+      "Bash(curl -s --noproxy '*' -o /dev/null -w 'VITE_UP_%{http_code}\\\\n' http://127.0.0.1:5177/)",
+      "Bash(curl -s --noproxy '*' -o /dev/null -w '%{http_code}\\\\n' http://127.0.0.1:5177/)",
+      "Bash(tail -f -n+1 \"C:\\\\\\\\Users\\\\\\\\yinm2\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\c--Users-yinm2-Desktop-yinm-yinm-code-ai-mocker\\\\\\\\d57c7776-eda3-41e0-974c-beeb3d56e952\\\\\\\\tasks\\\\\\\\bjm2aknvu.output\")",
+      "Bash(tail -f -n+1 \"C:\\\\\\\\Users\\\\\\\\yinm2\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\c--Users-yinm2-Desktop-yinm-yinm-code-ai-mocker\\\\\\\\d57c7776-eda3-41e0-974c-beeb3d56e952\\\\\\\\tasks\\\\\\\\bi6adc7nd.output\")",
+      "Bash(tail -f -n+1 \"C:\\\\\\\\Users\\\\\\\\yinm2\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\c--Users-yinm2-Desktop-yinm-yinm-code-ai-mocker\\\\\\\\d57c7776-eda3-41e0-974c-beeb3d56e952\\\\\\\\tasks\\\\\\\\bifrhrxp0.output\")"
+    ]
+  }
+}

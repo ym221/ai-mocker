@@ -1,0 +1,40 @@
+node_modules
+dist
+data
+uploads
+generated
+.git
+.gitignore
+.env
+.env.local
+.env.*.local
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Tests
+tests
+test-results
+playwright-report
+playwright.config.ts
+
+# Docs / project artifacts
+docs
+plans
+*.md
+
+# Editor / OS
+.vscode
+.idea
+.claude
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Misc
+.env.example

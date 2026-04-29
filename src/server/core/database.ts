@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import type { Database as BetterSqlite3Database } from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
@@ -13,7 +14,7 @@ if (!existsSync(dir)) {
 }
 
 // Create SQLite connection
-const sqlite = new Database(DB_PATH);
+const sqlite: BetterSqlite3Database = new Database(DB_PATH);
 
 // Enable WAL mode for better concurrent read performance
 sqlite.pragma('journal_mode = WAL');

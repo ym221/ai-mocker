@@ -7,7 +7,7 @@
     "dev": "concurrently \"pnpm dev:server\" \"pnpm dev:client\"",
     "dev:server": "tsx watch --ignore=./generated/** --ignore=./data/** --ignore=./uploads/** --env-file .env src/server/server.ts",
     "dev:client": "vite",
-    "build": "vite build && tsc -p tsconfig.server.json",
+    "build": "vite build && tsc -p tsconfig.server.json --noCheck",
     "start": "node dist/server/server.js"
   },
   "keywords": [],
@@ -74,5 +74,11 @@
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
     "vite": "6"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
   }
 }

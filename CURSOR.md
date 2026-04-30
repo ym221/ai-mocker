@@ -44,6 +44,12 @@
   - **session.moduleName 自动绑定**: chat-runner.applyModuleIntent 内 UPDATE sessions SET module_name,使前端 chat 起手的模块的 timeline tab 能找到对应 session(此前空白)
   - **Timer 立即出现**: chat.ts send() 推 user msg 同时也推空 assistant 占位符,MessageBubble.isGenerating 改为"非终态即视为进行中",从原本 toolCall 触发后才显示(elapsed 跳到 20s+) → 现在 send-to-startedAt < 100ms,banner 立即出现
   - **LIVE-01 真实 LLM 验证**: 7.7min 全程 RLM,timer 94ms 呈现 / module_name 自动绑定 / 5 phase 事件 + 2 llm_round + 8 tool_timing + 1 repair_triggered 全部记入 timeline。修复回归绿(74/75 chat 套件 + 真实 LLM E2E)
+- [x] **Step-Observability-1.3**: 对话气泡 UX 简化 — 去掉"思考中"徽章 + 加完成耗时
+  - 删 MessageBubble 的 thinking 徽章("思考中/已完成思考")— 思考内容用户看不到,徽章只是噪音,直接显示"进行中..." + 计时即可
+  - chat-runner.finalize 给所有终态事件(done/paused/aborted/error)payload 加 `finishedAt: Date.now()`,chat.ts applyEvent 提取进 DisplayMessage.finishedAt
+  - 完成后展示绿色"完成 · 耗时 X"横条(`<60s` 显示"30秒",`>=60s` 显示"X分Y秒",分整数则只显示"X分"),aborted/error 状态下不显示(让自己的 banner 主导)
+  - 用 server-stamped finishedAt 让历史会话 replay 也能精确还原耗时,不依赖前端 Date.now()
+  - 测试:6 条 CB01-CB05 + 更新 T04 验证徽章已下线
 - [x] **Step-Observability-1.2**: 用户截图反馈的 thinking 泄漏 + 服务重启 UX
   - **thinking-parser 孤儿 close tag(P11-P16)**: gemma 偶尔发 `</thought>` 而无对应开标签,parser 之前会泄漏 `<` 字符到正文。修复:在非 thinking 状态优先匹配 `</thinking>/</think>/</thought>/</reasoning>` 静默吃掉,支持跨 chunk 切片
   - **thinking-parser 孤儿 OPEN tag(P17-P21)**: gemma 漏发 `<` 只发 `thought>X</thought>`,导致 `thought>X` 全泄漏到正文(用户截图)。修复:用 `pendingText` 推迟 text emission,遇到孤儿 close 时回溯 pendingText 找 `tagname>` 前缀,把 `tag>` 之后到 close 之前的内容回归为 thinking

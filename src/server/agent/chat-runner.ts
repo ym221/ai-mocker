@@ -442,7 +442,10 @@ export class ChatRunner {
     const terminalMessage = typeof extra?.message === 'string' ? (extra.message as string) : undefined;
     this.applyModuleFinalize(terminal, terminalMessage);
     this.flushPendingCards();
-    this.appendEvent(terminal, extra ?? {});
+    // Stamp finishedAt on the terminal event so the frontend can compute total
+    // elapsed = finishedAt - assistantMsg.startedAt (works for live + history replay).
+    const terminalPayload = { ...(extra ?? {}), finishedAt: Date.now() };
+    this.appendEvent(terminal, terminalPayload);
 
     if (this.currentMessageId != null) {
       sqlite.prepare(`UPDATE messages SET finalized_at = ?, paused = ? WHERE id = ?`)

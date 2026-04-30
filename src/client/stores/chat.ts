@@ -49,6 +49,7 @@ export interface DisplayMessage {
   aborted?: boolean;
   abortReason?: string;             // 'server_restart' | undefined (user-pause)
   startedAt?: number;               // ms timestamp from server (message.started_at)
+  finishedAt?: number;              // ms timestamp; set by terminal events (done/paused/aborted/error)
 }
 
 export interface StreamEvent {
@@ -197,6 +198,8 @@ function applyEvent(s: StreamState, ev: StreamEvent): void {
       msg.messageError = String((p as any).message ?? 'Error');
       msg.streamDone = true;
       msg.thinkingComplete = true;
+      const finishedAt = (p as any).finishedAt;
+      if (typeof finishedAt === 'number') msg.finishedAt = finishedAt;
       s.status = 'error';
       break;
     }
@@ -205,6 +208,8 @@ function applyEvent(s: StreamState, ev: StreamEvent): void {
       if (msg && msg.role === 'assistant') {
         msg.streamDone = true;
         msg.thinkingComplete = true;
+        const finishedAt = (p as any).finishedAt;
+        if (typeof finishedAt === 'number') msg.finishedAt = finishedAt;
       }
       s.status = 'done';
       break;
@@ -218,6 +223,8 @@ function applyEvent(s: StreamState, ev: StreamEvent): void {
         msg.thinkingComplete = true;
         const reason = (p as any).reason;
         if (typeof reason === 'string') msg.abortReason = reason;
+        const finishedAt = (p as any).finishedAt;
+        if (typeof finishedAt === 'number') msg.finishedAt = finishedAt;
       }
       s.status = 'paused';
       break;

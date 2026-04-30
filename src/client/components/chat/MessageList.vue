@@ -71,6 +71,7 @@ watch(() => props.messages[props.messages.length - 1]?.toolCalls?.length, scroll
         :abort-reason="msg.abortReason"
         :retry-user-content="userContentBefore(index)"
         :started-at="msg.startedAt"
+        :finished-at="msg.finishedAt"
         @retry="emit('retry', $event)"
       />
     </div>

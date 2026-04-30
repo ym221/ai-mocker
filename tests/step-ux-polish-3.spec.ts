@@ -59,7 +59,7 @@ test('T03 生成中气泡不含 .progress-bar / .progress-track 动画', async (
 // T04 — 思考徽章可见，但 thinking-body 被删除（Task 4）
 // =======================================================================
 
-test('T04 思考徽章展示，但不存在可展开的思考内容区', async ({ page }) => {
+test('T04 (Step-Observability-1.3) 思考徽章已下线 — 不再展示"思考中/已完成思考"', async ({ page }) => {
   const token = await getToken();
   const sid = await createSession(token, 'T04');
 
@@ -72,14 +72,12 @@ test('T04 思考徽章展示，但不存在可展开的思考内容区', async (
 
   await page.goto(`/chat/${sid}`);
 
-  // 徽章出现
-  const badge = page.getByTestId('thinking-badge').first();
-  await expect(badge).toBeVisible({ timeout: 8000 });
-
+  // 老 thinking-badge 已删除 — 用户视角"思考中"对其无意义。
+  // 应该出现 generating-banner(进行中 + 计时)替代。
+  await expect(page.getByTestId('generating-banner').first()).toBeVisible({ timeout: 8000 });
+  expect(await page.getByTestId('thinking-badge').count()).toBe(0);
   // 不得有 thinking-body（即使 thinking 内容非空）
   expect(await page.locator('.thinking-body').count()).toBe(0);
-  // 徽章不是可点击展开按钮
-  expect(await badge.locator('button').count()).toBe(0);
 });
 
 // =======================================================================

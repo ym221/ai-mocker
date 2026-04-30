@@ -34,6 +34,8 @@ const props = defineProps<{
   aborted?: boolean;
   abortReason?: string;
   startedAt?: number;
+  /** Server-stamped completion timestamp (terminal event payload). Used to compute total elapsed = finishedAt - startedAt. */
+  finishedAt?: number;
   /** When 'server_restart' aborted, parent passes the original user content here so the retry button can resend it. */
   retryUserContent?: string;
 }>();
@@ -46,10 +48,6 @@ const isServerRestart = computed(() => props.aborted && props.abortReason === 's
 
 const router = useRouter();
 const isUser = computed(() => props.role === 'user');
-
-// ===== 思考过程（仅状态徽章，不展开具体内容） =====
-const hasThinking = computed(() => !!props.thinking);
-const isThinking = computed(() => hasThinking.value && !props.thinkingComplete);
 
 // ===== 生成中状态 =====
 // 判定顺序：终态优先 > 存在产物（modules/error） > 否则视为进行中
@@ -95,6 +93,13 @@ const elapsedSec = computed(() => {
   return diff < 0 ? 0 : diff;
 });
 
+function formatElapsed(s: number): string {
+  if (s < 60) return `${s}秒`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r === 0 ? `${m}分` : `${m}分${r}秒`;
+}
+
 const elapsedText = computed(() => {
   const s = elapsedSec.value;
   if (s < 60) return `${s}s`;
@@ -102,6 +107,33 @@ const elapsedText = computed(() => {
   const r = s % 60;
   return `${m}m${r.toString().padStart(2, '0')}s`;
 });
+
+// 已完成的一次生成,显示总耗时。优先用服务器戳的 finishedAt(精确,
+// 历史会话 replay 也有);若缺失,用切流到终态的本地时刻兜底。
+const finalElapsedSec = computed(() => {
+  if (!props.streamDone || !props.startedAt) return null;
+  const end = props.finishedAt ?? Date.now();
+  const diff = Math.floor((end - props.startedAt) / 1000);
+  return diff < 0 ? 0 : diff;
+});
+
+const finalElapsedText = computed(() => {
+  const s = finalElapsedSec.value;
+  return s == null ? '' : formatElapsed(s);
+});
+
+// 何时显示"耗时 X"完成横条:
+//   - 已 streamDone(终态)
+//   - 不是 user 消息
+//   - 该消息确实有过生成阶段(有 startedAt)
+//   - aborted/error 状态下已有自己的 banner,不再重复显示完成
+const showCompletionBanner = computed(() =>
+  props.streamDone
+  && !isUser.value
+  && !!props.startedAt
+  && !props.aborted
+  && !props.messageError
+);
 
 // ===== 正文渲染（AI 流式：打字机；用户/历史消息：直接展示） =====
 const THINKING_TAG_RE = /<(thought|think|thinking|reasoning)>[\s\S]*?<\/\1>/gi;
@@ -170,17 +202,6 @@ const cardStatusClass = (s: string) => CARD_STATUS_CLASS[s] || 'status-error';
 
   <!-- AI 消息：文章式，无头像无气泡 -->
   <div v-else class="py-4 space-y-3">
-    <!-- 思考过程（仅状态徽章，不暴露内容） -->
-    <div v-if="hasThinking" class="thinking-wrapper" data-testid="thinking-badge">
-      <div class="thinking-trigger">
-        <span v-if="isThinking" class="thinking-dot"></span>
-        <svg v-else class="w-3.5 h-3.5 text-green-500 flex-shrink-0" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zm3.41 5.59L7 10l-2.41-2.41L5.3 6.88 7 8.59l3.71-3.71.7.71z" />
-        </svg>
-        <span class="thinking-trigger-text">{{ isThinking ? '思考中...' : '已完成思考' }}</span>
-      </div>
-    </div>
-
     <!-- 生成中状态（已用时） -->
     <div v-if="isGenerating" class="generating-banner" data-testid="generating-banner">
       <div class="generating-banner-row">
@@ -240,6 +261,18 @@ const cardStatusClass = (s: string) => CARD_STATUS_CLASS[s] || 'status-error';
       </div>
     </div>
 
+    <!-- 完成提示 -->
+    <div
+      v-if="showCompletionBanner"
+      class="completion-banner"
+      data-testid="completion-banner"
+    >
+      <svg class="w-3.5 h-3.5 text-green-500 flex-shrink-0" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zm3.41 5.59L7 10l-2.41-2.41L5.3 6.88 7 8.59l3.71-3.71.7.71z" />
+      </svg>
+      <span>完成 · 耗时 <span data-testid="completion-elapsed">{{ finalElapsedText }}</span></span>
+    </div>
+
     <!-- 错误提示 -->
     <div v-if="messageError" class="error-banner">
       <AlertCircle class="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
@@ -286,37 +319,6 @@ const cardStatusClass = (s: string) => CARD_STATUS_CLASS[s] || 'status-error';
 }
 :deep(code) {
   word-break: break-word;
-}
-
-/* ===== 思考过程 ===== */
-.thinking-wrapper {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.thinking-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 0;
-  font-size: 13px;
-  color: hsl(var(--muted-foreground));
-  user-select: none;
-  align-self: flex-start;
-}
-
-.thinking-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: hsl(var(--primary));
-  animation: dot-pulse 1.2s ease-in-out infinite;
-  flex-shrink: 0;
-}
-@keyframes dot-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.4; transform: scale(0.75); }
 }
 
 /* ===== 生成中提示 ===== */
@@ -447,6 +449,18 @@ const cardStatusClass = (s: string) => CARD_STATUS_CLASS[s] || 'status-error';
   font-size: 12px;
   color: hsl(var(--muted-foreground));
   font-family: ui-monospace, monospace;
+}
+
+/* ===== 完成提示 ===== */
+.completion-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(34, 197, 94, 0.08);
+  color: rgb(21, 128, 61);
+  font-size: 12px;
 }
 
 /* ===== 错误提示 ===== */

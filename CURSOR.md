@@ -1,12 +1,12 @@
 # MockForge 执行游标
 
 ## 当前位置
-- **Phase**: Step-Observability-1 完成
-- **状态**: 全链路日志能力上线 — emit 异步 fire-and-forget,负 seq 与主事件流隔离,前端模块详情页加 "执行日志" tab,性能开销实测 0.1%(<5% 硬约束)
+- **Phase**: Step-Observability-1.6 完成
+- **状态**: 仓储模块对话→CRUD→删除→MCP 重建 全链路 @real-llm e2e 3 轮稳定全绿(12-14 min/轮)。两个用户实测痛点修复:phase bar 0% 占比 + "模块就绪但对话仍计时"
 
 ## 下一步
-- 用户跑一次真实 LLM 模块生成,在 "执行日志" tab 截图阶段占比 + 修复次数,贴入 `plans/OBSERVABILITY-BASELINE.md`
 - 据真实数据走 `plans/CONTEXT-WORKFLOW-NEXT.md` 的 Q1 决策树,选 (A)/(B)/(C) 路径开 Step-Workflow-2
+- 可选:把 `tests/e2e-warehouse-full.spec.ts` 接入 CI 作为长任务硬验收门槛
 
 ## 已完成 Step
 - [x] Step 1: 项目初始化 (d759059)
@@ -44,6 +44,16 @@
   - **session.moduleName 自动绑定**: chat-runner.applyModuleIntent 内 UPDATE sessions SET module_name,使前端 chat 起手的模块的 timeline tab 能找到对应 session(此前空白)
   - **Timer 立即出现**: chat.ts send() 推 user msg 同时也推空 assistant 占位符,MessageBubble.isGenerating 改为"非终态即视为进行中",从原本 toolCall 触发后才显示(elapsed 跳到 20s+) → 现在 send-to-startedAt < 100ms,banner 立即出现
   - **LIVE-01 真实 LLM 验证**: 7.7min 全程 RLM,timer 94ms 呈现 / module_name 自动绑定 / 5 phase 事件 + 2 llm_round + 8 tool_timing + 1 repair_triggered 全部记入 timeline。修复回归绿(74/75 chat 套件 + 真实 LLM E2E)
+- [x] **Step-Observability-1.6**: 修"模块就绪但对话仍计时" — modules API 加 hasActiveSession + 双状态展示
+  - **根因**: API 自愈逻辑(health=healthy → status=active)在 session 还在跑 run_test/修 bug 时就触发,导致模块列表"就绪"和对话页"进行中... 5m12s"严重不同步
+  - **后端**: `src/server/api/modules.ts` list/detail 加 `hasActiveSession` 字段(查 sessions.run_status='running' AND module_name=?);自愈仍生效但 DB 持久化推迟到 session 终态后,避免 chat-card 状态被提前覆盖
+  - **前端**: modules store/Module 类型加 hasActiveSession;ModulesPage 列表对 status=active && hasActiveSession 显示"就绪 · 生成中" + 旋转图标,轮询条件包含 hasActiveSession;ModuleDetailPage 加蓝色 banner "模块已就绪,对话仍在进行"
+  - **测试**: 5 条 MOD-FIX01..05 + 3 轮 @real-llm e2e 实测,每轮 +20-25s 观察到 hasActiveSession=true + status=creating,chat 终态后翻转 false
+- [x] **Step-Observability-1.5**: 修 phase bar "0% 占比" — aggregator 合成 tool_timing + denom 改用 sumKnown + NaN 防御
+  - **根因**: chat-runner 只埋了 prompt_build / llm_thinking / repair_loop / finalize 四阶段,write_files / run_test / manage_data 等"真正吃时间"的 tool 一个 phase 都没有;denom 用 totalMs(session 总时长)→ 小阶段 pct < 0.1% 被 toFixed(1) 显示为 "0.0%"
+  - **修复**: timeline-aggregator 新增 TOOL_PHASE_MAP,把 tool_timing 事件合成为 phase 行(write_file/write_files → write_files,run_test → run_test,manage_data → sql_execute);read-only 工具(list_modules/read_file 等)有意不映射避免噪音;防御 NaN / <=0 durationMs;PhaseBar denom 改用 sumKnown(已记录阶段之和=100%)+ "未记录 X" 灰字提示总耗时差额;<0.1% 显示 "<0.1%" 而非 "0.0%"
+  - **测试**: 3 条 OB-FIX01..03 + 3 轮 @real-llm e2e 实测,timeline 每个 phase 占比均 > 0
+  - **bonus 测试**: `tests/e2e-warehouse-full.spec.ts` WH-FULL-01 — 7-phase 全链路 @real-llm 验收(对话生成/健康/timeline/REST CRUD/DELETE/MCP 重建/MCP CRUD),3 轮稳定 12-14 min/轮,作为 Bug-1+2 的端到端守卫
 - [x] **Step-Observability-1.4**: 修复"改第 N 条数据被清空"严重 bug + 空回复 UX
   - **Agent manage_data 缺 update/list/batch_delete 行动**: 用户实测 "把第一条图片换成 X" → AI 推理"无 update 工具" → 走 clear+insert 兜底 → 30 条全删。修复:Agent 工具暴露完整 7 action(对齐 MCP 端,底层早已支持)
   - **system-prompt 加"数据修改铁律"**: "改第 N 条" → 必先 list 拿 id 再 update;禁 clear+insert/bulk_generate 假装原地修改;禁无 id 盲调 update/delete

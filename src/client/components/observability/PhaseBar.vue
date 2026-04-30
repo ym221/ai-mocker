@@ -57,33 +57,56 @@ interface Segment {
 
 // Stack same-named phases together so the bar isn't confusing when LLM
 // has multiple rounds (e.g. several llm_thinking segments).
+//
+// Denominator = sumKnown (recorded phases) so the bar shows the breakdown of
+// *recorded* time and segments sum to 100%. The session's wall-clock totalMs
+// is shown separately in the label below — if it differs from sumKnown we
+// surface the gap as "未记录 / unrecorded" so the user can see something
+// happened off-camera (e.g. tool work that wasn't instrumented).
 const stacked = computed<Segment[]>(() => {
   const totals = new Map<string, { ms: number; outcome: string }>();
   for (const p of props.phases) {
+    if (!Number.isFinite(p.durationMs) || p.durationMs <= 0) continue;
     const cur = totals.get(p.phase) ?? { ms: 0, outcome: 'ok' };
     cur.ms += p.durationMs;
     if (p.outcome !== 'ok') cur.outcome = p.outcome;
     totals.set(p.phase, cur);
   }
   const sumKnown = Array.from(totals.values()).reduce((a, b) => a + b.ms, 0);
-  const denom = props.totalMs && props.totalMs > sumKnown ? props.totalMs : sumKnown;
-  if (denom <= 0) return [];
+  if (sumKnown <= 0) return [];
 
   // Order matches conceptual flow
   const ORDER = ['prompt_build', 'llm_thinking', 'write_files', 'sql_execute', 'run_test', 'repair_loop', 'finalize'];
   const segs: Segment[] = [];
   for (const k of ORDER) {
     const v = totals.get(k);
-    if (v) segs.push({ phase: k, durationMs: v.ms, pct: (v.ms / denom) * 100, outcome: v.outcome });
+    if (v) segs.push({ phase: k, durationMs: v.ms, pct: (v.ms / sumKnown) * 100, outcome: v.outcome });
   }
-  // Add any unknown phases at end
   for (const [k, v] of totals.entries()) {
-    if (!ORDER.includes(k)) segs.push({ phase: k, durationMs: v.ms, pct: (v.ms / denom) * 100, outcome: v.outcome });
+    if (!ORDER.includes(k)) segs.push({ phase: k, durationMs: v.ms, pct: (v.ms / sumKnown) * 100, outcome: v.outcome });
   }
   return segs;
 });
 
-const totalLabel = computed(() => formatMs(props.totalMs ?? 0));
+const sumKnownMs = computed(() =>
+  stacked.value.reduce((a, s) => a + s.durationMs, 0),
+);
+const unrecordedMs = computed(() => {
+  if (!props.totalMs || props.totalMs <= sumKnownMs.value) return 0;
+  return props.totalMs - sumKnownMs.value;
+});
+const totalLabel = computed(() => formatMs(props.totalMs ?? sumKnownMs.value));
+
+function pctLabel(pct: number): string {
+  if (!Number.isFinite(pct)) return '0%';
+  if (pct > 0 && pct < 0.1) return '<0.1%';
+  return `${pct.toFixed(1)}%`;
+}
+// Clamp width to a small minimum so non-zero phases stay visible in the bar.
+function widthStyle(pct: number): string {
+  if (!Number.isFinite(pct) || pct <= 0) return '0%';
+  return `${Math.max(pct, 0.4).toFixed(2)}%`;
+}
 </script>
 
 <template>
@@ -93,8 +116,8 @@ const totalLabel = computed(() => formatMs(props.totalMs ?? 0));
       <div
         v-for="seg in stacked"
         :key="seg.phase"
-        :title="`${labelOf(seg.phase)} · ${formatMs(seg.durationMs)} (${seg.pct.toFixed(1)}%)`"
-        :style="{ width: seg.pct.toFixed(2) + '%', background: colorOf(seg.phase) }"
+        :title="`${labelOf(seg.phase)} · ${formatMs(seg.durationMs)} (${pctLabel(seg.pct)})`"
+        :style="{ width: widthStyle(seg.pct), background: colorOf(seg.phase) }"
         class="phase-seg"
         :class="{ 'phase-seg-failed': seg.outcome === 'failed' }"
         :data-phase="seg.phase"
@@ -107,12 +130,17 @@ const totalLabel = computed(() => formatMs(props.totalMs ?? 0));
         <span class="phase-dot" :style="{ background: colorOf(seg.phase) }"></span>
         <span class="phase-name">{{ labelOf(seg.phase) }}</span>
         <span class="phase-dur">{{ formatMs(seg.durationMs) }}</span>
-        <span class="phase-pct">({{ seg.pct.toFixed(1) }}%)</span>
+        <span class="phase-pct">({{ pctLabel(seg.pct) }})</span>
       </div>
     </div>
 
-    <!-- Total -->
-    <div class="phase-total" data-testid="phase-total">总耗时：{{ totalLabel }}</div>
+    <!-- Total + unrecorded gap -->
+    <div class="phase-total" data-testid="phase-total">
+      总耗时：{{ totalLabel }}
+      <span v-if="unrecordedMs > 0" class="phase-unrecorded" data-testid="phase-unrecorded">
+        · 未记录 {{ formatMs(unrecordedMs) }}
+      </span>
+    </div>
   </div>
 </template>
 
@@ -160,4 +188,5 @@ const totalLabel = computed(() => formatMs(props.totalMs ?? 0));
 .phase-dur { color: #475569; }
 .phase-pct { color: #94a3b8; }
 .phase-total { font-size: 13px; color: #0f172a; font-weight: 600; margin-top: 2px; }
+.phase-unrecorded { font-weight: 400; color: #94a3b8; margin-left: 4px; }
 </style>

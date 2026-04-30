@@ -71,6 +71,19 @@ export interface TimelineSummary {
   rawEvents: RawEvent[];
 }
 
+/**
+ * Map tool names → synthetic phase names. Only tools whose wall time matters
+ * for the user's mental model show up here. Read-only tools (list_modules,
+ * read_file, get_module_template, set_module_intent) are intentionally
+ * unmapped — they're <50ms each and would just add noise.
+ */
+const TOOL_PHASE_MAP: Record<string, string> = {
+  write_file: 'write_files',
+  write_files: 'write_files',
+  run_test: 'run_test',
+  manage_data: 'sql_execute',
+};
+
 function parsePayload(s: string | null | undefined): any {
   if (!s) return {};
   try { return JSON.parse(s); } catch { return {}; }
@@ -110,19 +123,51 @@ export function aggregateTimeline(sessionId: string, options: { rawEventLimit?: 
   const primaryEvents = rawEvents.filter((e) => e.seq > 0);
 
   // ----- Aggregate phases -----
+  // Sources: explicit phase_end events from chat-runner, PLUS synthesized rows
+  // from tool_timing events for tools that consume meaningful wall time
+  // (write_files, run_test, manage_data). Without synthesis, the bar would
+  // only show prompt_build / llm_thinking / finalize and report sub-1% values
+  // even though the tool work consumed most of the runtime — the user-reported
+  // "have records but 0%" symptom.
   const phases: PhaseRow[] = [];
   for (const ev of obsEvents) {
     if (ev.type === 'phase_end') {
-      const startedAtMs = (ev.payload.ts ?? 0) - (ev.payload.durationMs ?? 0);
+      const dur = Number(ev.payload.durationMs ?? 0);
+      // Defensive: drop NaN / negative / zero. Zero-duration phases would
+      // contribute 0% no matter what we do; treat missing/zero durationMs as
+      // a malformed emit (the symptom users see as "rows exist but bar is
+      // empty") and drop them rather than poison the bar with empty entries.
+      if (!Number.isFinite(dur) || dur <= 0) continue;
+      const ts = Number(ev.payload.ts ?? 0);
+      const startedAtMs = Number.isFinite(ts) ? ts - dur : 0;
       phases.push({
         phase: String(ev.payload.phase ?? 'unknown'),
         startedAtMs,
-        durationMs: Number(ev.payload.durationMs ?? 0),
+        durationMs: Math.round(dur),
         outcome: (ev.payload.outcome === 'failed' || ev.payload.outcome === 'partial')
           ? ev.payload.outcome : 'ok',
         meta: { ...ev.payload, phase: undefined, ts: undefined, durationMs: undefined, outcome: undefined, _ts: undefined },
       });
     }
+  }
+  // Synthesize tool phases from tool_timing — see TOOL_PHASE_MAP below for mapping.
+  for (const ev of obsEvents) {
+    if (ev.type !== 'tool_timing') continue;
+    const tool = String(ev.payload.toolName ?? '');
+    const phase = TOOL_PHASE_MAP[tool];
+    if (!phase) continue; // unmapped tool (read-only / metadata) → skip, don't pollute the bar
+    const dur = Number(ev.payload.durationMs ?? 0);
+    if (!Number.isFinite(dur) || dur < 0) continue;
+    const finishedAt = Number(ev.payload.finishedAt ?? 0);
+    const startedAt = Number(ev.payload.startedAt ?? (finishedAt - dur));
+    const isErr = String(ev.payload.resultSummary ?? '').startsWith('error');
+    phases.push({
+      phase,
+      startedAtMs: Number.isFinite(startedAt) ? startedAt : 0,
+      durationMs: Math.round(dur),
+      outcome: isErr ? 'failed' : 'ok',
+      meta: { synthesizedFrom: 'tool_timing', toolName: tool },
+    });
   }
   phases.sort((a, b) => a.startedAtMs - b.startedAtMs);
 

@@ -170,18 +170,34 @@ export function buildTools(userId: number, runner?: ChatRunner) {
     }),
 
     manage_data: tool({
-      description: 'Manage mock data: insert, bulk_generate, delete, or clear records.',
+      description:
+        'Read or modify mock records of a module. Actions:\n'
+        + '  • list — paginated read; pass page/pageSize/where to filter; returns { list, total }. ALWAYS list first to find the record id before update/delete.\n'
+        + '  • insert — create one record; pass data (object).\n'
+        + '  • update — patch ONE record by id; pass id + data (only the fields you want to change).\n'
+        + '  • delete — remove ONE record by id.\n'
+        + '  • batch_delete — remove many records by ids array.\n'
+        + '  • clear — wipe ALL records of the entity. **Only use when user explicitly asks to clear all data.**\n'
+        + '  • bulk_generate — seed N random records via faker.\n'
+        + '\n'
+        + 'CRITICAL: If user asks to modify the Nth record / a specific record, the correct flow is\n'
+        + '  list({ page:1, pageSize:N }) → pick id → update({ id, data: { field: newValue } }).\n'
+        + 'NEVER use clear + bulk_generate + insert as a substitute for update — it destroys other rows.',
       parameters: z.object({
-        action: z.enum(['insert', 'bulk_generate', 'delete', 'clear']).describe('Action to perform'),
+        action: z.enum(['list', 'insert', 'update', 'delete', 'batch_delete', 'clear', 'bulk_generate']).describe('Operation to perform'),
         moduleName: z.string().describe('Module name'),
-        data: z.record(z.unknown()).optional().describe('Record data (for insert)'),
+        data: z.record(z.unknown()).optional().describe('Record data (for insert / update — partial fields ok for update)'),
+        id: z.number().optional().describe('Record id (for update / delete)'),
+        ids: z.array(z.number()).optional().describe('Record ids (for batch_delete)'),
         count: z.number().optional().describe('Number of records to generate (for bulk_generate)'),
-        id: z.number().optional().describe('Record ID (for delete)'),
+        page: z.number().optional().describe('Page number, 1-based (for list)'),
+        pageSize: z.number().optional().describe('Records per page (for list, default 20)'),
+        where: z.record(z.unknown()).optional().describe('Filter conditions (for list, e.g. { status: "active" })'),
         entityName: z.string().optional().describe('Entity name (defaults to first entity in _meta.json)'),
       }),
-      execute: async ({ action, moduleName, data, count, id, entityName }) =>
+      execute: async ({ action, moduleName, data, count, id, ids, page, pageSize, where, entityName }) =>
         instrument('manage_data', { action, moduleName }, () =>
-          serialize(() => manageData(userId, action, moduleName, data, { count, id, entityName })),
+          serialize(() => manageData(userId, action, moduleName, data, { count, id, ids, page, pageSize, where, entityName })),
         ),
     }),
 

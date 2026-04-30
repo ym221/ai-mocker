@@ -147,8 +147,12 @@ return { __mock__: { status: 303, headers: { Location: '/x' }, body: null } };  
 - \`read_file(path)\`
 - \`get_module_template(kind)\` — 按需读模块样例(kind: crud-basic / with-constraints)
 - \`run_test(moduleName)\`
-- \`manage_data(action, moduleName, ...)\` — insert/bulk_generate/delete/clear
+- \`manage_data(action, moduleName, ...)\` — list/insert/**update**/delete/batch_delete/clear/bulk_generate
 - \`list_modules()\` / \`delete_module(name)\`
+
+## 数据修改铁律(违反=严重错误)
+
+"改第 N 条 / 把某记录的 X 字段改 Y" → **先 list 拿 id 再 update**: list({page:1, pageSize:N}) → 取 list[i].id → update({id, data:{字段:新值}})。data 只传要改的字段。**禁** clear+insert/bulk_generate 假装原地修改(会清空其他记录),**禁** 无 id 盲调 update/delete。
 
 ## 约束表达优先级(强制)
 

@@ -44,6 +44,11 @@
   - **session.moduleName 自动绑定**: chat-runner.applyModuleIntent 内 UPDATE sessions SET module_name,使前端 chat 起手的模块的 timeline tab 能找到对应 session(此前空白)
   - **Timer 立即出现**: chat.ts send() 推 user msg 同时也推空 assistant 占位符,MessageBubble.isGenerating 改为"非终态即视为进行中",从原本 toolCall 触发后才显示(elapsed 跳到 20s+) → 现在 send-to-startedAt < 100ms,banner 立即出现
   - **LIVE-01 真实 LLM 验证**: 7.7min 全程 RLM,timer 94ms 呈现 / module_name 自动绑定 / 5 phase 事件 + 2 llm_round + 8 tool_timing + 1 repair_triggered 全部记入 timeline。修复回归绿(74/75 chat 套件 + 真实 LLM E2E)
+- [x] **Step-Observability-1.4**: 修复"改第 N 条数据被清空"严重 bug + 空回复 UX
+  - **Agent manage_data 缺 update/list/batch_delete 行动**: 用户实测 "把第一条图片换成 X" → AI 推理"无 update 工具" → 走 clear+insert 兜底 → 30 条全删。修复:Agent 工具暴露完整 7 action(对齐 MCP 端,底层早已支持)
+  - **system-prompt 加"数据修改铁律"**: "改第 N 条" → 必先 list 拿 id 再 update;禁 clear+insert/bulk_generate 假装原地修改;禁无 id 盲调 update/delete
+  - **空回复 UX**: AI 流终止但 assistant 消息无 text + 无 modules → completion banner 改用中性灰色"已结束 · 无回复 · 耗时 X"(感叹号图标),不再显示绿勾"完成"误导用户以为成功
+  - 测试:7 条新增 MD-AGT01-06 + completion-banner CB06/CB07,全 117/118 chat+observability 回归绿
 - [x] **Step-Observability-1.3**: 对话气泡 UX 简化 — 去掉"思考中"徽章 + 加完成耗时
   - 删 MessageBubble 的 thinking 徽章("思考中/已完成思考")— 思考内容用户看不到,徽章只是噪音,直接显示"进行中..." + 计时即可
   - chat-runner.finalize 给所有终态事件(done/paused/aborted/error)payload 加 `finishedAt: Date.now()`,chat.ts applyEvent 提取进 DisplayMessage.finishedAt

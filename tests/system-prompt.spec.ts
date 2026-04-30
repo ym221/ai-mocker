@@ -97,10 +97,12 @@ test.describe('system-prompt structure', () => {
     expect(prompt).toContain('所有金额字段统一用 BigInt 分单位');
   });
 
-  test('SP07 slim 后的 prompt 体积 ≤ 8.5KB (原 18KB)', () => {
+  test('SP07 slim 后的 prompt 体积 ≤ 9KB (原 18KB)', () => {
     // 核心目的: Step-Perf-1.1 的提速来自 prompt 瘦身, 回归防止未来再次膨胀
     // Step-Fix-1.4 把阈值从 8000 调到 8500(加了 5-file 清单 / 时间戳列 /
     // 多实体 controller 样例等契约硬规则,净增 ~350 bytes,仍远低于原 18KB)
+    // Step-Observability-1.4 调到 9000(加了"数据修改铁律"硬规则,
+    // 防 LLM 用 clear+insert 假装 update 清空数据,净增 ~150 bytes)
     const emptyPrompt = buildSystemPrompt(emptyParams);
     const withPresetPrompt = buildSystemPrompt({
       ...emptyParams,
@@ -108,8 +110,8 @@ test.describe('system-prompt structure', () => {
         content: JSON.stringify({ fieldNaming: 'snake_case', responseFormat: { success: true, data: null } }),
       },
     });
-    expect(Buffer.byteLength(emptyPrompt, 'utf8')).toBeLessThan(8500);
-    expect(Buffer.byteLength(withPresetPrompt, 'utf8')).toBeLessThan(9000);
+    expect(Buffer.byteLength(emptyPrompt, 'utf8')).toBeLessThan(9000);
+    expect(Buffer.byteLength(withPresetPrompt, 'utf8')).toBeLessThan(9500);
     // 指引 AI 用 get_module_template 按需拉样例,而不是把样例写死在 prompt 里
     expect(emptyPrompt).toContain('get_module_template');
     // 完整 todo 模板示例(120 行)应已移出,这些特征字符不能再出现在 prompt 里

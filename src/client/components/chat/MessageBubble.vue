@@ -135,6 +135,16 @@ const showCompletionBanner = computed(() =>
   && !props.messageError
 );
 
+// 空回复检测: 流终止 + 无 text + 无 module 卡片(thinking 不算因为用户看不到)。
+// 此时显示绿勾"完成"会误导用户(以为生成成功),改用中性灰色"已结束 · 无回复"
+// 提示这次 turn 没产出有效输出。
+const isEmptyCompletion = computed(() => {
+  if (!showCompletionBanner.value) return false;
+  const hasText = !!(props.content && props.content.trim());
+  const hasModules = (props.modules?.length ?? 0) > 0;
+  return !hasText && !hasModules;
+});
+
 // ===== 正文渲染（AI 流式：打字机；用户/历史消息：直接展示） =====
 const THINKING_TAG_RE = /<(thought|think|thinking|reasoning)>[\s\S]*?<\/\1>/gi;
 const THINKING_OPEN_RE = /<(thought|think|thinking|reasoning)>[\s\S]*$/i;
@@ -265,12 +275,17 @@ const cardStatusClass = (s: string) => CARD_STATUS_CLASS[s] || 'status-error';
     <div
       v-if="showCompletionBanner"
       class="completion-banner"
+      :class="{ 'completion-banner-empty': isEmptyCompletion }"
       data-testid="completion-banner"
+      :data-empty="isEmptyCompletion ? '1' : '0'"
     >
-      <svg class="w-3.5 h-3.5 text-green-500 flex-shrink-0" viewBox="0 0 16 16" fill="currentColor">
+      <!-- 正常: 绿勾;无回复: 灰色感叹号 -->
+      <svg v-if="!isEmptyCompletion" class="w-3.5 h-3.5 text-green-500 flex-shrink-0" viewBox="0 0 16 16" fill="currentColor">
         <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zm3.41 5.59L7 10l-2.41-2.41L5.3 6.88 7 8.59l3.71-3.71.7.71z" />
       </svg>
-      <span>完成 · 耗时 <span data-testid="completion-elapsed">{{ finalElapsedText }}</span></span>
+      <AlertCircle v-else class="w-3.5 h-3.5 flex-shrink-0" />
+      <span v-if="!isEmptyCompletion">完成 · 耗时 <span data-testid="completion-elapsed">{{ finalElapsedText }}</span></span>
+      <span v-else>已结束 · 无回复 · 耗时 <span data-testid="completion-elapsed">{{ finalElapsedText }}</span></span>
     </div>
 
     <!-- 错误提示 -->
@@ -461,6 +476,13 @@ const cardStatusClass = (s: string) => CARD_STATUS_CLASS[s] || 'status-error';
   background: rgba(34, 197, 94, 0.08);
   color: rgb(21, 128, 61);
   font-size: 12px;
+}
+.completion-banner-empty {
+  background: rgba(100, 116, 139, 0.1);
+  color: rgb(71, 85, 105);
+}
+.completion-banner-empty :deep(.lucide-alert-circle) {
+  color: rgb(100, 116, 139);
 }
 
 /* ===== 错误提示 ===== */

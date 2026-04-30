@@ -137,6 +137,102 @@ test.describe('完成 · 耗时 banner (Step-Observability-1.3)', () => {
     }
   });
 
+  test('CB06 空回复(无 text/无 modules) → 显示中性"已结束 · 无回复"而非绿色"完成"', async ({ page }) => {
+    // 制造一个 done session,但 assistant 消息没有 text / modules /thinking
+    // (重现用户截图的 image_gallery 第二轮 — AI 只调了 clear,没产出任何回复)
+    const startedAt = Date.now() - 60_000;
+    const finishedAt = startedAt + 53_000;
+    const sid = randomUUID();
+    const db = new Database(DB_PATH);
+    try {
+      db.prepare(
+        `INSERT INTO sessions (id, title, user_id, run_status, last_seq) VALUES (?, ?, ?, 'idle', 0)`,
+      ).run(sid, '[CB06] empty completion', 1);
+      const userMsg = db.prepare(
+        `INSERT INTO messages (session_id, role, content, started_at, created_at) VALUES (?, 'user', ?, ?, datetime('now')) RETURNING id`,
+      ).get(sid, '改第一条', startedAt) as { id: number };
+      const asstMsg = db.prepare(
+        `INSERT INTO messages (session_id, role, content, started_at, finalized_at, created_at) VALUES (?, 'assistant', '', ?, datetime('now'), datetime('now')) RETURNING id`,
+      ).get(sid, startedAt) as { id: number };
+      // user (seq=1), thinking (seq=2 — creates assistant in store), done (seq=3)
+      // 注意: 没有 text 事件,也没有 card 事件
+      db.prepare(
+        `INSERT INTO message_events (session_id, message_id, seq, type, payload, created_at) VALUES (?, ?, 1, 'user', ?, datetime('now'))`,
+      ).run(sid, userMsg.id, JSON.stringify({ content: '改第一条', startedAt }));
+      db.prepare(
+        `INSERT INTO message_events (session_id, message_id, seq, type, payload, created_at) VALUES (?, ?, 2, 'thinking', ?, datetime('now'))`,
+      ).run(sid, asstMsg.id, JSON.stringify({ text: 'thinking only' }));
+      db.prepare(
+        `INSERT INTO message_events (session_id, message_id, seq, type, payload, created_at) VALUES (?, ?, 3, 'done', ?, datetime('now'))`,
+      ).run(sid, asstMsg.id, JSON.stringify({ finishedAt }));
+      db.prepare(`UPDATE sessions SET last_seq = 3 WHERE id = ?`).run(sid);
+    } finally { db.close(); }
+
+    try {
+      await page.goto(`/chat/${sid}`);
+      const banner = page.getByTestId('completion-banner').first();
+      await expect(banner).toBeVisible({ timeout: 8000 });
+      // 必须是 empty 模式
+      await expect(banner).toHaveAttribute('data-empty', '1');
+      // 文案是"已结束 · 无回复"而非"完成"
+      await expect(banner).toContainText('已结束');
+      await expect(banner).toContainText('无回复');
+      const txt = await banner.textContent();
+      expect(txt).not.toContain('完成');
+    } finally {
+      const cleanup = new Database(DB_PATH);
+      try { cleanup.prepare(`DELETE FROM sessions WHERE id = ?`).run(sid); } finally { cleanup.close(); }
+    }
+  });
+
+  test('CB07 有 module 卡片但无 text → 仍算正常"完成"(因为模块卡是有效产出)', async ({ page }) => {
+    // 已经在 CB01 隐式覆盖(fake runner 走完含 module card),这里专门 history fixture 验证
+    const startedAt = Date.now() - 30_000;
+    const finishedAt = startedAt + 20_000;
+    const sid = randomUUID();
+    const db = new Database(DB_PATH);
+    try {
+      db.prepare(
+        `INSERT INTO sessions (id, title, user_id, run_status, last_seq) VALUES (?, ?, ?, 'idle', 0)`,
+      ).run(sid, '[CB07] module card no text', 1);
+      const userMsg = db.prepare(
+        `INSERT INTO messages (session_id, role, content, started_at, created_at) VALUES (?, 'user', ?, ?, datetime('now')) RETURNING id`,
+      ).get(sid, '生成模块', startedAt) as { id: number };
+      const asstMsg = db.prepare(
+        `INSERT INTO messages (session_id, role, content, started_at, finalized_at, created_at) VALUES (?, 'assistant', '', ?, datetime('now'), datetime('now')) RETURNING id`,
+      ).get(sid, startedAt) as { id: number };
+      db.prepare(
+        `INSERT INTO message_events (session_id, message_id, seq, type, payload, created_at) VALUES (?, ?, 1, 'user', ?, datetime('now'))`,
+      ).run(sid, userMsg.id, JSON.stringify({ content: '生成模块', startedAt }));
+      db.prepare(
+        `INSERT INTO message_events (session_id, message_id, seq, type, payload, created_at) VALUES (?, ?, 2, 'thinking', ?, datetime('now'))`,
+      ).run(sid, asstMsg.id, JSON.stringify({ text: '...' }));
+      // card 事件 (有效产出)
+      db.prepare(
+        `INSERT INTO message_events (session_id, message_id, seq, type, payload, created_at) VALUES (?, ?, 3, 'card', ?, datetime('now'))`,
+      ).run(sid, asstMsg.id, JSON.stringify({
+        kind: 'module',
+        data: { name: 'cb07_mod', displayName: 'CB07', basePath: '/mock/cb07', status: 'active', endpointCount: 1 },
+      }));
+      db.prepare(
+        `INSERT INTO message_events (session_id, message_id, seq, type, payload, created_at) VALUES (?, ?, 4, 'done', ?, datetime('now'))`,
+      ).run(sid, asstMsg.id, JSON.stringify({ finishedAt }));
+      db.prepare(`UPDATE sessions SET last_seq = 4 WHERE id = ?`).run(sid);
+    } finally { db.close(); }
+
+    try {
+      await page.goto(`/chat/${sid}`);
+      const banner = page.getByTestId('completion-banner').first();
+      await expect(banner).toBeVisible({ timeout: 8000 });
+      // 有 module card → 正常完成
+      await expect(banner).toHaveAttribute('data-empty', '0');
+      await expect(banner).toContainText('完成');
+    } finally {
+      const cleanup = new Database(DB_PATH);
+      try { cleanup.prepare(`DELETE FROM sessions WHERE id = ?`).run(sid); } finally { cleanup.close(); }
+    }
+  });
+
   test('CB05 时长格式: 30s → "30秒", 90s → "1分30秒", 600s → "10分"', async ({ page }) => {
     // 仅检查格式逻辑,通过 3 条 history fixture
     const cases: Array<{ secs: number; expect: string }> = [

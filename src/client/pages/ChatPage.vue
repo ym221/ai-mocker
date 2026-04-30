@@ -178,6 +178,7 @@ watch(() => route.params.sessionId, async (newId) => {
         :loading="isLoading"
         @send="handleSend"
         @stop="handleStop"
+        @retry="handleSend"
       />
     </div>
 

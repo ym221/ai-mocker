@@ -47,6 +47,7 @@ export interface DisplayMessage {
   messageError?: string;
   streamDone?: boolean;
   aborted?: boolean;
+  abortReason?: string;             // 'server_restart' | undefined (user-pause)
   startedAt?: number;               // ms timestamp from server (message.started_at)
 }
 
@@ -114,13 +115,31 @@ function applyEvent(s: StreamState, ev: StreamEvent): void {
       const startedAt = typeof (p as any).startedAt === 'number' ? (p as any).startedAt : undefined;
       // Record assistant startedAt for the next assistant turn
       s.pendingAssistantStartedAt = startedAt ?? null;
-      // Dedup optimistic push: if last msg is same-content user, merge startedAt
-      const last = lastMsg(s);
-      if (last && last.role === 'user' && last.content === content) {
-        if (startedAt && !last.startedAt) last.startedAt = startedAt;
-        break;
+      // Dedup optimistic push: scan from the tail (not just lastMsg) because
+      // send() now pushes [user, empty_assistant], so the optimistic user is
+      // at index -2 not -1. Match on role+content, merge startedAt if missing.
+      let merged = false;
+      for (let i = s.messages.length - 1; i >= 0; i--) {
+        const m = s.messages[i];
+        if (m.role === 'user' && m.content === content) {
+          if (startedAt && !m.startedAt) m.startedAt = startedAt;
+          merged = true;
+          break;
+        }
+        // Stop walking if we cross a finalized assistant — that's a previous turn
+        if (m.role === 'assistant' && m.streamDone) break;
       }
-      s.messages.push({ role: 'user', content, streamDone: true, startedAt });
+      if (!merged) {
+        s.messages.push({ role: 'user', content, streamDone: true, startedAt });
+      }
+      // Also propagate startedAt onto the optimistic empty assistant placeholder
+      // so the timer matches the server's real start time once it arrives.
+      if (startedAt) {
+        const last = s.messages[s.messages.length - 1];
+        if (last && last.role === 'assistant' && !last.streamDone && !last.content && !last.thinking) {
+          last.startedAt = startedAt;
+        }
+      }
       break;
     }
     case 'thinking': {
@@ -197,6 +216,8 @@ function applyEvent(s: StreamState, ev: StreamEvent): void {
         msg.streamDone = true;
         msg.aborted = true;
         msg.thinkingComplete = true;
+        const reason = (p as any).reason;
+        if (typeof reason === 'string') msg.abortReason = reason;
       }
       s.status = 'paused';
       break;
@@ -416,6 +437,20 @@ export const useChatStore = defineStore('chat', () => {
     const optimisticStartedAt = Date.now();
     s.pendingAssistantStartedAt = optimisticStartedAt;
     s.messages.push({ role: 'user', content, streamDone: true, startedAt: optimisticStartedAt });
+    // Also push an empty assistant placeholder so the "进行中..." banner +
+    // elapsed timer render IMMEDIATELY (not after the first thinking/tool_call
+    // event arrives, which can be 5-30s into the LLM stream). The first
+    // streamed event will reuse this placeholder via ensureAssistant().
+    s.messages.push({
+      role: 'assistant',
+      content: '',
+      thinking: '',
+      thinkingComplete: false,
+      toolCalls: [],
+      modules: [],
+      startedAt: optimisticStartedAt,
+      streamDone: false,
+    });
 
     const auth = useAuthStore();
     const ac = new AbortController();

@@ -5,6 +5,7 @@ import { db } from '../core/database.js';
 import { sessions, messages } from '../core/schema.js';
 import { authMiddleware } from '../core/auth.js';
 import { success } from '../core/response.js';
+import { aggregateTimeline } from '../core/timeline-aggregator.js';
 
 export default async function sessionRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authMiddleware);
@@ -117,5 +118,20 @@ export default async function sessionRoutes(app: FastifyInstance) {
 
     db.delete(sessions).where(eq(sessions.id, id)).run();
     return success(null, 'Session deleted');
+  });
+
+  // GET /api/sessions/:sessionId/timeline — observability/timeline view
+  app.get('/api/sessions/:sessionId/timeline', async (request, reply) => {
+    const userId = request.user!.id;
+    const id = (request.params as { sessionId: string }).sessionId;
+
+    const session = db.select().from(sessions)
+      .where(and(eq(sessions.id, id), eq(sessions.userId, userId)))
+      .get();
+    if (!session) return reply.status(404).send({ success: false, message: 'Session not found' });
+
+    const summary = aggregateTimeline(id);
+    if (!summary) return reply.status(404).send({ success: false, message: 'Session not found' });
+    return success(summary);
   });
 }

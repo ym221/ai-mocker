@@ -5,8 +5,9 @@ import { useModulesStore } from '../stores/modules';
 import { useChatStore } from '../stores/chat';
 import { toast } from '../composables/use-toast';
 import { Button } from '../components/ui/button';
-import { Play, Database, BookOpen, Copy, Download, FileJson, RefreshCw, AlertCircle } from 'lucide-vue-next';
+import { Play, Database, BookOpen, Copy, Download, FileJson, RefreshCw, AlertCircle, Activity } from 'lucide-vue-next';
 import DataTable from '../components/data/DataTable.vue';
+import TimelineView from '../components/observability/TimelineView.vue';
 import { usePageHeader } from '@/composables/use-page-header';
 import MarkdownIt from 'markdown-it';
 
@@ -267,6 +268,7 @@ async function regenerateModule() {
             { id: 'endpoints', label: '接口', icon: Play },
             { id: 'data', label: '数据', icon: Database },
             { id: 'doc', label: '文档', icon: BookOpen },
+            { id: 'timeline', label: '执行日志', icon: Activity },
           ]"
           :key="tab.id"
           @click="selectTab(tab.id)"
@@ -362,6 +364,11 @@ async function regenerateModule() {
         <div v-else class="text-center py-12 text-muted-foreground">
           暂无文档
         </div>
+      </div>
+
+      <!-- Timeline Tab (执行日志) -->
+      <div v-if="activeTab === 'timeline'" class="max-w-6xl" data-testid="timeline-tab">
+        <TimelineView :module-name="moduleName" :active="activeTab === 'timeline'" />
       </div>
     </template>
   </div>

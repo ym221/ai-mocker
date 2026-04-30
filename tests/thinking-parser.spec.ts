@@ -104,4 +104,99 @@ test.describe('ThinkingParser', () => {
     expect(concat(chunks, 'thinking')).toBe('hello');
     expect(concat(chunks, 'text')).toBe('world');
   });
+
+  // ===== Orphan close tag handling (Step-Observability-1.2 fix) =====
+  // gemma 偶尔会发出不平衡的 `</thought>` 等闭合标签 (没有对应开标签)。
+  // parser 必须静默吃掉,否则前面的 `<` 会泄漏到正文 (用户截图所见 bug)。
+
+  test('P11 孤儿 </thought> 完整出现 → 静默吃掉,正文不含 <', () => {
+    const parser = new ThinkingParser();
+    const chunks = runFeed(parser, 'before</thought>after');
+    expect(concat(chunks, 'text')).toBe('beforeafter');
+  });
+
+  test('P12 多个孤儿 </thought> 连串 → 全部吃掉', () => {
+    const parser = new ThinkingParser();
+    const chunks = runFeed(parser, '</thought></thought></thought>real');
+    expect(concat(chunks, 'text')).toBe('real');
+  });
+
+  test('P13 孤儿闭标签所有 4 种 close 都识别', () => {
+    for (const close of ['</thinking>', '</think>', '</thought>', '</reasoning>']) {
+      const parser = new ThinkingParser();
+      const chunks = runFeed(parser, `pre${close}post`);
+      expect(concat(chunks, 'text')).toBe('prepost');
+    }
+  });
+
+  test('P14 孤儿 close 跨 chunk 切片 → 仍正确合并 (回归"<泄漏")', () => {
+    // 正是用户截图的精确场景: chunk 边界切在 `<` 后面
+    const parser = new ThinkingParser();
+    const chunks = runFeed(parser, 'before<', '/thought>after');
+    expect(concat(chunks, 'text')).toBe('beforeafter');
+  });
+
+  test('P15 真不平衡 (only `<` 后跟非标签字符) 仍按文本输出 — 不破坏现有语义', () => {
+    const parser = new ThinkingParser();
+    const chunks = runFeed(parser, 'a < b');
+    expect(concat(chunks, 'text')).toBe('a < b');
+  });
+
+  test('P16 重现用户截图: `</thought></thought></thought></thought></thought><` 全静默', () => {
+    const parser = new ThinkingParser();
+    const chunks = runFeed(parser, '</thought></thought></thought></thought></thought><');
+    // 5 个孤儿 close 全吃掉, 末尾的 `<` 是不完整 (可能是下一个 close 的前缀)
+    // → 留 buffer; flush 时按 text 出 (这是合理的:流真的结束了)
+    const flushed = parser.flush();
+    const allText = concat([...chunks, ...flushed], 'text');
+    // 最后一个 `<` 在 flush 时按 text 出,符合预期 (流没继续 → 不再判定是 close 前缀)
+    expect(allText).toBe('<');
+    // 关键: 5 个 </thought> 都被静默吃了
+    expect(allText).not.toContain('thought');
+  });
+
+  // ===== Orphan OPEN tag (gemma 漏发 `<`,只发 `tagname>...content...</tagname>`) =====
+
+  test('P17 漏发 `<` 的开标签: `thought>X</thought>Y` → X 算 thinking, Y 算 text', () => {
+    const parser = new ThinkingParser();
+    const chunks = runFeed(parser, 'thought>The data has been generated.</thought>已为模块批量生成 100 条数据');
+    expect(concat(chunks, 'thinking')).toBe('The data has been generated.');
+    expect(concat(chunks, 'text')).toBe('已为模块批量生成 100 条数据');
+    expect(chunks.some(c => c.type === 'thinking_complete')).toBe(true);
+  });
+
+  test('P18 漏发 `<` 的开标签 + 前面有正常 text: `prefix.thought>X</thought>after`', () => {
+    const parser = new ThinkingParser();
+    const chunks = runFeed(parser, 'real reply.thought>secret thinking</thought>more reply');
+    expect(concat(chunks, 'thinking')).toBe('secret thinking');
+    expect(concat(chunks, 'text')).toBe('real reply.more reply');
+  });
+
+  test('P19 4 种 tag 漏发 `<` 全部能被识别', () => {
+    for (const tag of ['thinking', 'think', 'thought', 'reasoning']) {
+      const parser = new ThinkingParser();
+      const chunks = runFeed(parser, `${tag}>X</${tag}>Y`);
+      expect(concat(chunks, 'thinking')).toBe('X');
+      expect(concat(chunks, 'text')).toBe('Y');
+    }
+  });
+
+  test('P20 漏发 `<` + 跨 chunk: gemma 流式分片仍能正确归类', () => {
+    const parser = new ThinkingParser();
+    // 拆成两段, `</tag>` 在第二段才到
+    const chunks = runFeed(parser, 'thought>The data has been', ' generated.</thought>已为模块');
+    expect(concat(chunks, 'thinking')).toBe('The data has been generated.');
+    expect(concat(chunks, 'text')).toBe('已为模块');
+  });
+
+  test('P21 真重现用户场景 — 完整 gemma 输出', () => {
+    const parser = new ThinkingParser();
+    const real = 'thought>The data has been successfully generated. I should now inform the user.</thought>已为仓储管理模块批量生成 100 条模拟数据。';
+    const chunks = runFeed(parser, real);
+    // 关键: text 不应包含 "thought>" 泄漏
+    const text = concat(chunks, 'text');
+    expect(text).not.toContain('thought>');
+    expect(text).toBe('已为仓储管理模块批量生成 100 条模拟数据。');
+    expect(concat(chunks, 'thinking')).toBe('The data has been successfully generated. I should now inform the user.');
+  });
 });

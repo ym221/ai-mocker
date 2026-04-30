@@ -24,6 +24,11 @@ import { createCompatFetch } from './compat-fetch.js';
 import { ThinkingParser } from './thinking-adapter.js';
 import { buildProviderOptions, reportCacheSupport } from './prompt-cache.js';
 import { decideWatchdog, buildNudgeMessage } from './watchdog.js';
+import {
+  emitPhaseStart,
+  emitPhaseEnd,
+  emitLlmRound,
+} from '../core/observability.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -427,6 +432,7 @@ export class ChatRunner {
   }
 
   private finalize(terminal: 'done' | 'paused' | 'error' | 'aborted', extra?: Record<string, unknown>): void {
+    const finalizeStart = emitPhaseStart(this.sessionId, 'finalize', { terminal });
     this.clearRunTimeout();
     this.clearHeartbeat();
     this.flushTextBuffers();
@@ -456,6 +462,7 @@ export class ChatRunner {
       .run(newStatus, now(), this.sessionId);
 
     this.abortController = null;
+    emitPhaseEnd(this.sessionId, 'finalize', finalizeStart, terminal === 'error' ? 'failed' : 'ok', { terminal });
     this.emitter.emit('close');
     this.bumpIdleTimer();
   }
@@ -494,6 +501,12 @@ export class ChatRunner {
       sqlite.prepare(`UPDATE modules SET status = 'editing', error_message = NULL, updated_at = ? WHERE id = ?`)
         .run(nowStr, existing.id);
     }
+
+    // Bind this session to the module so the module timeline lookup
+    // (`/api/modules/:name/timeline`) can find this session even when the
+    // user started the chat without explicitly choosing a module.
+    sqlite.prepare(`UPDATE sessions SET module_name = ?, updated_at = ? WHERE id = ?`)
+      .run(moduleName, nowStr, this.sessionId);
 
     this.appendEvent('card', {
       kind: 'module_intent',
@@ -647,6 +660,9 @@ export class ChatRunner {
     const abortController = new AbortController();
     this.abortController = abortController;
 
+    // ===== Observability: prompt_build phase =====
+    const promptBuildStarted = emitPhaseStart(this.sessionId, 'prompt_build');
+
     try {
       // ===== Load provider =====
       const providerId = session.providerId || 1;
@@ -723,8 +739,23 @@ export class ChatRunner {
       // Observable: surfaced in logs so users can verify cache is wired up
       try { console.log(`[prompt-cache] session=${this.sessionId} provider=${provider.type} note="${cacheReport.note}"`); } catch { /* ignore */ }
 
+      // ===== Observability: end prompt_build phase =====
+      emitPhaseEnd(this.sessionId, 'prompt_build', promptBuildStarted, 'ok', {
+        moduleListSize: moduleList.length,
+        hasPreset: !!preset,
+        hasModuleContext: !!moduleContext,
+      });
+
+      // Observability: round counter shared across nudge retries
+      let llmRoundCounter = 0;
+
       // ===== Stream consumer (extracted so we can re-run for watchdog nudge) =====
       const consumeOneStream = async (messagesForThisAttempt: CoreMessage[]) => {
+        const roundIndex = ++llmRoundCounter;
+        const roundStart = Date.now();
+        let firstPartAt: number | null = null;
+        const llmThinkingStart = emitPhaseStart(this.sessionId, 'llm_thinking', { round: roundIndex });
+
         const result = streamText({
           model,
           system: systemPrompt + extraSystemSuffix,
@@ -737,6 +768,7 @@ export class ChatRunner {
 
         for await (const part of safeFullStream(result.fullStream)) {
           if (abortController.signal.aborted) break;
+          if (firstPartAt == null) firstPartAt = Date.now();
 
           switch (part.type) {
             case 'text-delta': {
@@ -797,6 +829,14 @@ export class ChatRunner {
             }
           }
         }
+
+        // ===== Observability: close out this LLM round =====
+        const roundEnd = Date.now();
+        emitPhaseEnd(this.sessionId, 'llm_thinking', llmThinkingStart, 'ok', { round: roundIndex });
+        emitLlmRound(this.sessionId, roundIndex, roundEnd - roundStart, {
+          ttftMs: firstPartAt != null ? firstPartAt - roundStart : undefined,
+          model: session.model || provider.defaultModel,
+        });
       };
 
       // ===== Watchdog: don't let "done-but-empty" leak out =====
@@ -832,12 +872,17 @@ export class ChatRunner {
         await consumeOneStream(coreMessages);
 
         // Watchdog nudge loop. decideWatchdog() returns proceed/nudge/fail.
+        // Track repair_loop phase (only emitted when at least one nudge fires).
         let nudgesIssued = 0;
+        let repairLoopStart: number | null = null;
         while (true) {
           if (abortController.signal.aborted) break;
           const action = decideWatchdog(currentWatchdogState(nudgesIssued));
           if (action.kind === 'proceed' || action.kind === 'fail') break;
           // action.kind === 'nudge'
+          if (repairLoopStart == null) {
+            repairLoopStart = emitPhaseStart(this.sessionId, 'repair_loop', { trigger: 'watchdog_no_write' });
+          }
           this.appendEvent('thinking', {
             content: `[framework] watchdog nudge ${action.attempt}/${action.total} — model declared intent without writing any file; re-prompting`,
           });
@@ -848,6 +893,9 @@ export class ChatRunner {
           coreMessages.push({ role: 'user', content: nudgeText });
           nudgesIssued = action.attempt;
           await consumeOneStream(coreMessages);
+        }
+        if (repairLoopStart != null) {
+          emitPhaseEnd(this.sessionId, 'repair_loop', repairLoopStart, 'ok', { nudges: nudgesIssued });
         }
 
         // flush residue from parser (one final time after possibly-multiple streams)

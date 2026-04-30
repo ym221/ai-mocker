@@ -124,6 +124,33 @@ test('T02 切到其他页面再切回 chat，已用时不从 0 重置', async ({
 });
 
 // =======================================================================
+// T02b — 计时器在用户发送后立即出现（不等首次 tool call）— Step-Observability-1 修复
+// =======================================================================
+
+test('T02b 用户发送后 banner 立即出现且初始 elapsed < 3s', async ({ page }) => {
+  await page.goto('/chat');
+  await page.waitForTimeout(400);
+  await startNewChatSession(page);
+  await page.waitForTimeout(300);
+
+  const textarea = page.locator('textarea').first();
+  await textarea.fill('__fake_slow__ T02b');
+  await textarea.press('Enter');
+
+  // banner 必须在 2s 内出现 — 历史 bug:要等首次 tool_call(可能 20s+)
+  const banner = page.getByTestId('generating-banner').first();
+  await expect(banner).toBeVisible({ timeout: 2500 });
+
+  // 第一次拿到 elapsed,数字必须接近 0(小于 3s),不应跳到 20s+
+  const initialText = await page.getByTestId('generating-elapsed').first().textContent();
+  const initial = parseInt((initialText || '0').replace(/[^\d]/g, ''), 10) || 0;
+  expect(initial).toBeLessThan(3);
+
+  // 清理:停止生成避免污染
+  await page.locator('[title="停止生成"]').click().catch(() => {});
+});
+
+// =======================================================================
 // T01 — 字符级打字机效果（Task 1）
 // =======================================================================
 
@@ -230,7 +257,11 @@ test('T06b Documentation Tab 下载 OpenAPI 生成合法 JSON', async ({ page })
     test.skip(true, '测试环境缺少模块 fixture');
     return;
   }
-  const activeMod = modList.data.find((m: any) => m.status === 'active') || modList.data[0];
+  // Pick an active module that actually has entities — empty test-fixture
+  // modules will never produce a downloadable OpenAPI spec.
+  const activeMod = modList.data.find((m: any) => m.status === 'active' && m.meta?.entities?.length > 0)
+    || modList.data.find((m: any) => m.status === 'active')
+    || modList.data[0];
 
   await page.goto(`/modules/${activeMod.name}`);
   await page.waitForTimeout(600);

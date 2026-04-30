@@ -7,6 +7,18 @@ const props = defineProps<{
   messages: DisplayMessage[];
 }>();
 
+const emit = defineEmits<{
+  (e: 'retry', content: string): void;
+}>();
+
+/** Look up the user message that preceded the given assistant index. */
+function userContentBefore(idx: number): string | undefined {
+  for (let i = idx - 1; i >= 0; i--) {
+    if (props.messages[i].role === 'user') return props.messages[i].content;
+  }
+  return undefined;
+}
+
 const listRef = ref<HTMLDivElement | null>(null);
 const autoScroll = ref(true);
 
@@ -56,7 +68,10 @@ watch(() => props.messages[props.messages.length - 1]?.toolCalls?.length, scroll
         :message-error="msg.messageError"
         :stream-done="msg.streamDone"
         :aborted="msg.aborted"
+        :abort-reason="msg.abortReason"
+        :retry-user-content="userContentBefore(index)"
         :started-at="msg.startedAt"
+        @retry="emit('retry', $event)"
       />
     </div>
   </div>

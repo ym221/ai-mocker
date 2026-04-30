@@ -13,6 +13,7 @@ defineProps<{
 defineEmits<{
   send: [message: string];
   stop: [];
+  retry: [content: string];
 }>();
 
 const chatStore = useChatStore();
@@ -24,7 +25,7 @@ const activeSession = computed(() => {
 
 <template>
   <div class="flex flex-col h-full">
-    <MessageList :messages="messages" />
+    <MessageList :messages="messages" @retry="$emit('retry', $event)" />
     <SessionMetaBar :session="activeSession" />
     <ChatInput
       :loading="loading"

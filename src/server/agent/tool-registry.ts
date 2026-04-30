@@ -9,13 +9,91 @@ import { listModules } from './tools/list-modules.js';
 import { deleteModule } from './tools/delete-module.js';
 import { fetchModuleTemplate } from './tools/get-module-template.js';
 import { runSerialized } from './lib/session-mutex.js';
+import { emitToolTiming, emitRepair, type RepairCause } from '../core/observability.js';
 import type { ChatRunner } from './chat-runner.js';
 
+// Per-session repair attempt counter. Keyed by sessionId+cause.
+// Cleared lazily — entries grow only with active sessions.
+const repairAttempts = new Map<string, Map<string, number>>();
+
+function bumpRepairAttempt(sessionId: string, cause: string): number {
+  let bucket = repairAttempts.get(sessionId);
+  if (!bucket) {
+    bucket = new Map();
+    repairAttempts.set(sessionId, bucket);
+  }
+  const next = (bucket.get(cause) ?? 0) + 1;
+  bucket.set(cause, next);
+  return next;
+}
+
+/** Map a tool failure result to a repair cause. Returns null if not a "repair needed" failure. */
+function classifyFailure(toolName: string, result: any): { cause: RepairCause; targetFiles: string[]; snippet: string } | null {
+  if (!result || typeof result !== 'object') return null;
+  // write_files / write_file failure
+  if (result.success === false) {
+    const msg = String(result.message || result.error || '');
+    const lower = msg.toLowerCase();
+    let cause: RepairCause = 'write_failed';
+    if (lower.includes('sql execution failed') || lower.includes('sqlite')) cause = 'sql_exec_failed';
+    else if (lower.includes('_meta.json') && (lower.includes('invalid') || lower.includes('parse'))) cause = 'meta_parse_error';
+    const targetFiles: string[] = [];
+    if (Array.isArray(result.perFile)) {
+      for (const pf of result.perFile) {
+        if (pf && typeof pf.path === 'string') targetFiles.push(pf.path);
+      }
+    }
+    return { cause, targetFiles, snippet: msg };
+  }
+  // run_test failure: result format = { success: bool, ... } or has failures
+  if (toolName === 'run_test') {
+    const failed = result.passed === false || result.failures > 0 || (Array.isArray(result.results) && result.results.some((r: any) => r?.passed === false));
+    if (failed) {
+      const snippet = JSON.stringify(result).slice(0, 500);
+      return { cause: 'run_test_failed', targetFiles: ['test.ts', 'controller.ts'], snippet };
+    }
+  }
+  return null;
+}
+
 export function buildTools(userId: number, runner?: ChatRunner) {
+  const sessionId = runner?.sessionId;
+
   /** Serialize write-side tool bodies per-session. Reads stay parallel. */
   const serialize = <T>(fn: () => Promise<T>): Promise<T> => {
     if (!runner) return fn();
     return runSerialized(runner.sessionId, fn);
+  };
+
+  /**
+   * Wrap a tool body with observability emit.
+   * Records tool_timing + repair_triggered (if the result indicates failure that
+   * the LLM will need to repair). Failures inside the wrapper are silenced so
+   * observability never breaks a tool call.
+   */
+  const instrument = async <T>(toolName: string, argSummary: Record<string, unknown> | undefined, fn: () => Promise<T>): Promise<T> => {
+    const startedAt = Date.now();
+    let res: T;
+    try {
+      res = await fn();
+    } catch (err) {
+      if (sessionId) {
+        try { emitToolTiming(sessionId, toolName, startedAt, 'error: ' + String((err as Error)?.message || err).slice(0, 100), argSummary); } catch { /* silent */ }
+      }
+      throw err;
+    }
+    if (sessionId) {
+      try {
+        const summary = (res && typeof res === 'object' && (res as any).success === false) ? 'error' : 'ok';
+        emitToolTiming(sessionId, toolName, startedAt, summary, argSummary);
+        const failure = classifyFailure(toolName, res);
+        if (failure) {
+          const attempt = bumpRepairAttempt(sessionId, failure.cause);
+          emitRepair(sessionId, failure.cause, attempt, failure.snippet, failure.targetFiles);
+        }
+      } catch { /* silent */ }
+    }
+    return res;
   };
 
   return {
@@ -46,7 +124,10 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         path: z.string().describe('File path relative to generated/{userId}/, e.g., "order/_meta.json"'),
         content: z.string().describe('Full file content'),
       }),
-      execute: async ({ path, content }) => serialize(() => writeFile(userId, path, content)),
+      execute: async ({ path, content }) =>
+        instrument('write_file', { path, contentBytes: content?.length ?? 0 }, () =>
+          serialize(() => writeFile(userId, path, content)),
+        ),
     }),
 
     write_files: tool({
@@ -61,7 +142,12 @@ export function buildTools(userId: number, runner?: ChatRunner) {
           content: z.string().describe('File content'),
         })).min(1).describe('Array of { path, content }. Keep ordering meaningful: schema.sql should come before _meta.json.'),
       }),
-      execute: async ({ files }) => serialize(() => writeFiles(userId, { files })),
+      execute: async ({ files }) =>
+        instrument(
+          'write_files',
+          { fileCount: files?.length ?? 0, paths: (files ?? []).slice(0, 8).map((f) => f.path) },
+          () => serialize(() => writeFiles(userId, { files })),
+        ),
     }),
 
     read_file: tool({
@@ -79,7 +165,8 @@ export function buildTools(userId: number, runner?: ChatRunner) {
       parameters: z.object({
         moduleName: z.string().describe('Module name to test'),
       }),
-      execute: async ({ moduleName }) => serialize(() => runTest(userId, moduleName)),
+      execute: async ({ moduleName }) =>
+        instrument('run_test', { moduleName }, () => serialize(() => runTest(userId, moduleName))),
     }),
 
     manage_data: tool({
@@ -93,7 +180,9 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         entityName: z.string().optional().describe('Entity name (defaults to first entity in _meta.json)'),
       }),
       execute: async ({ action, moduleName, data, count, id, entityName }) =>
-        serialize(() => manageData(userId, action, moduleName, data, { count, id, entityName })),
+        instrument('manage_data', { action, moduleName }, () =>
+          serialize(() => manageData(userId, action, moduleName, data, { count, id, entityName })),
+        ),
     }),
 
     list_modules: tool({

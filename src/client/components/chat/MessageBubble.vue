@@ -32,8 +32,17 @@ const props = defineProps<{
   messageError?: string;
   streamDone?: boolean;
   aborted?: boolean;
+  abortReason?: string;
   startedAt?: number;
+  /** When 'server_restart' aborted, parent passes the original user content here so the retry button can resend it. */
+  retryUserContent?: string;
 }>();
+
+const emit = defineEmits<{
+  (e: 'retry', content: string): void;
+}>();
+
+const isServerRestart = computed(() => props.aborted && props.abortReason === 'server_restart');
 
 const router = useRouter();
 const isUser = computed(() => props.role === 'user');
@@ -43,15 +52,19 @@ const hasThinking = computed(() => !!props.thinking);
 const isThinking = computed(() => hasThinking.value && !props.thinkingComplete);
 
 // ===== 生成中状态 =====
-// 判定顺序：终态优先 > 存在产物（modules/error） > 有工具调用在运行
+// 判定顺序：终态优先 > 存在产物（modules/error） > 否则视为进行中
+//
+// 历史行为只在 toolCalls.length>0 时才置位,导致用户发送后到第一次 tool_call
+// 之间(常 20-30s)看不到"进行中..."徽章,徽章一出现就跳到 20s+。改为:
+// 只要不是终态,就视为进行中(thinking / 等待首响应 / 工具调用都算)。
 const isGenerating = computed(() => {
   if (isUser.value) return false;
   if (props.streamDone) return false;
   if (props.aborted) return false;
   if (props.messageError) return false;
-  // 收到 module cards 意味着后端已进入 finalize，AI 执行完成 — 不再显示"进行中"
+  // 收到 module cards 意味着后端已进入 finalize,AI 执行完成 — 不再显示"进行中"
   if ((props.modules?.length ?? 0) > 0) return false;
-  return (props.toolCalls?.length ?? 0) > 0;
+  return true;
 });
 
 // 执行中的提示（统一为"进行中..."，不暴露具体操作）
@@ -237,9 +250,18 @@ const cardStatusClass = (s: string) => CARD_STATUS_CLASS[s] || 'status-error';
     </div>
 
     <!-- 被中断提示 -->
-    <div v-if="aborted && !messageError" class="aborted-banner">
+    <div v-if="aborted && !messageError" class="aborted-banner" :class="{ 'aborted-banner-restart': isServerRestart }">
       <AlertCircle class="w-4 h-4 text-orange-500 flex-shrink-0" />
-      <span>已停止生成</span>
+      <span v-if="isServerRestart">服务已重启,生成被中断</span>
+      <span v-else>已停止生成</span>
+      <button
+        v-if="isServerRestart && retryUserContent"
+        @click="emit('retry', retryUserContent)"
+        class="aborted-retry-btn"
+        data-testid="abort-retry-btn"
+      >
+        重试
+      </button>
     </div>
   </div>
 </template>
@@ -464,4 +486,23 @@ const cardStatusClass = (s: string) => CARD_STATUS_CLASS[s] || 'status-error';
   color: rgb(194, 65, 12);
   font-size: 12.5px;
 }
+.aborted-banner-restart {
+  background: rgba(59, 130, 246, 0.08);
+  color: rgb(29, 78, 216);
+}
+.aborted-banner-restart .text-orange-500 {
+  color: rgb(59, 130, 246) !important;
+}
+.aborted-retry-btn {
+  margin-left: 8px;
+  padding: 2px 10px;
+  border-radius: 12px;
+  background: rgb(59, 130, 246);
+  color: #fff;
+  font-size: 12px;
+  border: 0;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.aborted-retry-btn:hover { opacity: 0.85; }
 </style>

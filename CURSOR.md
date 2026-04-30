@@ -1,12 +1,12 @@
 # MockForge 执行游标
 
 ## 当前位置
-- **Phase**: ALL COMPLETE (Step-Fix-1 完成)
-- **状态**: Step-Fix-1 完成 — MCP 真实 LLM E2E 13 步全绿 (含 3 实体模块 warehouse 从 create → CRUD → update add phone → re-test 全流程)
+- **Phase**: Step-Observability-1 完成
+- **状态**: 全链路日志能力上线 — emit 异步 fire-and-forget,负 seq 与主事件流隔离,前端模块详情页加 "执行日志" tab,性能开销实测 0.1%(<5% 硬约束)
 
 ## 下一步
-- F3.1 E2E 发现的 run_test cleanup 偶发"首次失败第二次通过"(4 rows 残留) 可作为 Step-Fix-2 研究,非阻塞
-- 用户若再用 MCP 实测遇到新 bug,按 F1~F2 的分层修复思路扩展
+- 用户跑一次真实 LLM 模块生成,在 "执行日志" tab 截图阶段占比 + 修复次数,贴入 `plans/OBSERVABILITY-BASELINE.md`
+- 据真实数据走 `plans/CONTEXT-WORKFLOW-NEXT.md` 的 Q1 决策树,选 (A)/(B)/(C) 路径开 Step-Workflow-2
 
 ## 已完成 Step
 - [x] Step 1: 项目初始化 (d759059)
@@ -39,6 +39,16 @@
 - [x] **Step-MCP-5**: 单模块单流程 + 自动续接 + 并发约束 — runHeadlessSession 拆分 start+attach、write 工具 waitMaxSec + onConflict=resume、新增 get_session_status + cancel_session(12→14 工具)、concurrency gate(per-user 3 / global 10)、30s heartbeat keepalive、统一错误码 + hint
 - [x] **Step-Perf-1**: AI 生成提速 + 工具表面简化 + UX 打磨 — system prompt 18KB→7KB(模板外置 get_module_template)、batch write_files 替代 write_file 单文件(6 次 LLM→1 次)、provider-aware prompt caching(Anthropic + OpenAI-compat 前缀稳定)、per-session mutex + 并行读、14→12 MCP 工具(inspect_module 合并 doc+openapi+health)、write-tool-runner 抽象消除 update/create 70% 同构、module-repo 集中 DB+fs 查询、error recovery_steps(machine-actionable 下一步工具)、humanized stage + expectedRemainingSec + suggestedNextAction
 - [x] **Step-Perf-2**: 真实 LLM 实测暴露的 Bug 修复 + 测试覆盖补齐
+- [x] **Step-Observability-1**: 模块生成全链路日志 + 前端可视化(6 Task) — 复用 message_events 表(负 seq 隔离观察事件)+ setImmediate 异步入库 + 阶段/工具/修复/LLM 轮次聚合 API + ModuleDetailPage "执行日志" tab + 性能开销 0.1%(基线见 plans/OBSERVABILITY-BASELINE.md)。新增 23 条测试全绿,回归 152+ 条全绿
+- [x] **Step-Observability-1.1**: 真实 LLM 实测后的 3 个 UX/数据修复
+  - **session.moduleName 自动绑定**: chat-runner.applyModuleIntent 内 UPDATE sessions SET module_name,使前端 chat 起手的模块的 timeline tab 能找到对应 session(此前空白)
+  - **Timer 立即出现**: chat.ts send() 推 user msg 同时也推空 assistant 占位符,MessageBubble.isGenerating 改为"非终态即视为进行中",从原本 toolCall 触发后才显示(elapsed 跳到 20s+) → 现在 send-to-startedAt < 100ms,banner 立即出现
+  - **LIVE-01 真实 LLM 验证**: 7.7min 全程 RLM,timer 94ms 呈现 / module_name 自动绑定 / 5 phase 事件 + 2 llm_round + 8 tool_timing + 1 repair_triggered 全部记入 timeline。修复回归绿(74/75 chat 套件 + 真实 LLM E2E)
+- [x] **Step-Observability-1.2**: 用户截图反馈的 thinking 泄漏 + 服务重启 UX
+  - **thinking-parser 孤儿 close tag(P11-P16)**: gemma 偶尔发 `</thought>` 而无对应开标签,parser 之前会泄漏 `<` 字符到正文。修复:在非 thinking 状态优先匹配 `</thinking>/</think>/</thought>/</reasoning>` 静默吃掉,支持跨 chunk 切片
+  - **thinking-parser 孤儿 OPEN tag(P17-P21)**: gemma 漏发 `<` 只发 `thought>X</thought>`,导致 `thought>X` 全泄漏到正文(用户截图)。修复:用 `pendingText` 推迟 text emission,遇到孤儿 close 时回溯 pendingText 找 `tagname>` 前缀,把 `tag>` 之后到 close 之前的内容回归为 thinking
+  - **服务重启 abort UX**: tsx-watch 重启会触发 database.ts 写 `aborted{reason:'server_restart'}` 事件。chat.ts applyEvent 提取 reason 进 DisplayMessage.abortReason,MessageBubble 区分两种 abort:`server_restart` 显示"服务已重启,生成被中断" + 蓝色重试按钮(点击即重发原 prompt);用户主动 stop 仍是橙色"已停止生成"
+  - 测试:thinking-parser 11 条新增 P11-P21 全绿,abort-restart-retry 4 条 UI 测试全绿,完整 chat 回归 98/99 (1 skipped)
 - [x] **Step-Fix-1**: MCP 真实 LLM E2E 修复(6 Task) — mock-router named-controller 调度 + getEntities helper 统一实体源 + chat-runner watchdog+nudge 根治空 done + system-prompt 契约硬规则 + BaseModel outward 别名 + await async controller。F3.1 13 步真实 LLM E2E 全绿(3 实体 warehouse: create/CRUD/update add phone/6 tests 全通过 + access log 0×500) — 恢复 write_file 单文件工具(弱模型退回路径)、write_files 空 args 返更明确错误并引导退回、default waitMaxSec 60→180s(对齐真实 LLM 延迟)、stepCountIs 20→40(给真实生成足够步数)、新增 `tests/real-llm-e2e.spec.ts` 真实 gemma 端到端 E2E(RLM-01~04 作为硬验收门槛,以后不依赖用户手测)
 
 ## Step-Chat-Resumable 变更摘要

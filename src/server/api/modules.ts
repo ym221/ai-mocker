@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { eq, and, desc } from 'drizzle-orm';
 import { resolve, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
-import { db } from '../core/database.js';
+import { db, sqlite } from '../core/database.js';
 import { modules, sessions } from '../core/schema.js';
 import { authMiddleware } from '../core/auth.js';
 import { success } from '../core/response.js';
@@ -11,6 +11,20 @@ import { computeModuleHealth } from '../core/module-health.js';
 import { aggregateTimeline } from '../core/timeline-aggregator.js';
 
 const GENERATED_DIR = resolve('generated');
+
+/**
+ * Build a `Set<moduleName>` for modules that have a chat session currently in
+ * `running` state (i.e. AI is mid-generation). Lets the modules list show a
+ * "active · 生成中" sub-indicator so users don't see a healthy module while
+ * the conversation is still timing — addresses the "ready but still ticking"
+ * UX bug.
+ */
+function activeSessionModuleSet(userId: number): Set<string> {
+  const rows = sqlite
+    .prepare(`SELECT DISTINCT module_name FROM sessions WHERE user_id = ? AND run_status = 'running' AND module_name IS NOT NULL`)
+    .all(userId) as Array<{ module_name: string | null }>;
+  return new Set(rows.map(r => r.module_name).filter((n): n is string => !!n));
+}
 
 export default async function moduleRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authMiddleware);
@@ -21,6 +35,8 @@ export default async function moduleRoutes(app: FastifyInstance) {
     const result = db.select().from(modules)
       .where(eq(modules.userId, userId))
       .all();
+
+    const activeNames = activeSessionModuleSet(userId);
 
     // Enrich with _meta.json data + health; also self-heal transient status
     // (e.g. a 'creating' row whose files are now complete → flip to 'active').
@@ -34,17 +50,24 @@ export default async function moduleRoutes(app: FastifyInstance) {
       }
 
       const report = computeModuleHealth(userId, m.name);
+      const hasActiveSession = activeNames.has(m.name);
       let effectiveStatus = m.status;
-      // Self-heal: if files are healthy but DB status is stale → promote to active + persist
+      // Self-heal: if files are healthy but DB status is stale → promote to active + persist.
+      // Skip the persist while a chat session is still running so the in-progress
+      // status (creating/editing) keeps showing in the conversation card; the
+      // list still reports the healed status via `effectiveStatus` so the user
+      // sees the module as usable right away.
       if (report.health === 'healthy' && m.status !== 'active') {
         effectiveStatus = 'active';
-        // Persist the heal so it doesn't re-compute every request
-        try { db.update(modules).set({ status: 'active', errorMessage: null }).where(eq(modules.id, m.id)).run(); } catch {}
+        if (!hasActiveSession) {
+          try { db.update(modules).set({ status: 'active', errorMessage: null }).where(eq(modules.id, m.id)).run(); } catch {}
+        }
       }
       return {
         ...m,
         status: effectiveStatus,
         health: report.health,
+        hasActiveSession,
         meta,
       };
     });
@@ -69,13 +92,16 @@ export default async function moduleRoutes(app: FastifyInstance) {
     }
 
     const report = computeModuleHealth(userId, name);
+    const hasActiveSession = activeSessionModuleSet(userId).has(name);
     let effectiveStatus = mod.status;
     if (report.health === 'healthy' && mod.status !== 'active') {
       effectiveStatus = 'active';
-      try { db.update(modules).set({ status: 'active', errorMessage: null }).where(eq(modules.id, mod.id)).run(); } catch {}
+      if (!hasActiveSession) {
+        try { db.update(modules).set({ status: 'active', errorMessage: null }).where(eq(modules.id, mod.id)).run(); } catch {}
+      }
     }
 
-    return success({ ...mod, status: effectiveStatus, health: report.health, meta });
+    return success({ ...mod, status: effectiveStatus, health: report.health, hasActiveSession, meta });
   });
 
   // GET /api/modules/:name/context — read _context.md

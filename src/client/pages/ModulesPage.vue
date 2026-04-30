@@ -22,7 +22,9 @@ onMounted(() => {
   modulesStore.fetchModules();
   // Poll only while a module is in a transient state; silent refetch avoids DOM churn
   pollTimer = setInterval(() => {
-    const hasTransient = modulesStore.modules.some(m => m.status === 'creating' || m.status === 'editing');
+    const hasTransient = modulesStore.modules.some(
+      m => m.status === 'creating' || m.status === 'editing' || m.hasActiveSession
+    );
     if (hasTransient) modulesStore.refetchModules();
   }, 2000);
 });
@@ -111,9 +113,10 @@ async function handleDelete(name: string, displayName: string, ev: MouseEvent) {
             }"
             :data-testid="`status-${m.name}`"
           >
-            <Loader2 v-if="m.status === 'creating' || m.status === 'editing'" class="w-3 h-3 animate-spin" />
+            <Loader2 v-if="m.status === 'creating' || m.status === 'editing' || (m.status === 'active' && m.hasActiveSession)" class="w-3 h-3 animate-spin" />
             <AlertCircle v-else-if="m.status === 'error'" class="w-3 h-3" />
-            {{ statusLabel(m.status) }}
+            <template v-if="m.status === 'active' && m.hasActiveSession">就绪 · 生成中</template>
+            <template v-else>{{ statusLabel(m.status) }}</template>
           </span>
         </div>
         <p class="text-sm text-muted-foreground mb-3 line-clamp-2">{{ m.description || '暂无描述' }}</p>

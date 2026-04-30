@@ -5,7 +5,7 @@ import { useModulesStore } from '../stores/modules';
 import { useChatStore } from '../stores/chat';
 import { toast } from '../composables/use-toast';
 import { Button } from '../components/ui/button';
-import { Play, Database, BookOpen, Copy, Download, FileJson, RefreshCw, AlertCircle, Activity } from 'lucide-vue-next';
+import { Play, Database, BookOpen, Copy, Download, FileJson, RefreshCw, AlertCircle, Activity, Loader2 } from 'lucide-vue-next';
 import DataTable from '../components/data/DataTable.vue';
 import TimelineView from '../components/observability/TimelineView.vue';
 import { usePageHeader } from '@/composables/use-page-header';
@@ -237,6 +237,24 @@ async function regenerateModule() {
     <div v-if="!moduleData" class="text-center py-12 text-muted-foreground">加载中...</div>
 
     <template v-else>
+      <!-- Active-session banner: module is ready but a chat session is still
+           running against it. Lets the user know the module may keep changing
+           until the conversation ends — fixes the "ready but timer ticking"
+           confusion users hit when looking at the modules list mid-generation. -->
+      <div
+        v-if="moduleData.hasActiveSession && moduleData.status === 'active'"
+        class="mb-4 flex items-start gap-3 px-4 py-3 rounded-lg border border-blue-200 bg-blue-50"
+        data-testid="module-active-session-banner"
+      >
+        <Loader2 class="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5 animate-spin" />
+        <div class="flex-1 min-w-0">
+          <div class="text-sm font-medium text-blue-800">模块已就绪，对话仍在进行</div>
+          <div class="text-xs text-blue-700 mt-0.5">
+            AI 仍在与该模块交互（可能在测试或修改），结构与数据可能继续变化。
+          </div>
+        </div>
+      </div>
+
       <!-- Error banner + Retry (for degraded/error modules with functional fallback) -->
       <div
         v-if="moduleData.status === 'error'"

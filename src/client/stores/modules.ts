@@ -13,6 +13,7 @@ interface Module {
   lastRunStatus?: string | null;
   lastRunError?: string | null;
   health?: 'healthy' | 'degraded' | 'missing';
+  hasActiveSession?: boolean;
   createdAt: string;
   updatedAt: string;
   meta: any;

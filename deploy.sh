@@ -36,22 +36,26 @@ fi
 cmd="${1:-help}"
 shift || true
 
+# 抽出端口检测 + up 流程,deploy 子命令也用
+do_up() {
+  if command -v ss >/dev/null 2>&1 && ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE ":${HOST_PORT}\$"; then
+    echo "Error: 宿主机端口 $HOST_PORT 已被占用,改 .env 的 HOST_PORT 后再试" >&2
+    ss -lntp 2>/dev/null | grep ":${HOST_PORT} " || true
+    return 1
+  fi
+  echo "==> 启动服务,宿主机映射端口: $HOST_PORT(容器内 3000)"
+  $DC up -d "$@"
+  sleep 2
+  $DC ps
+  echo "==> 健康检查: curl http://localhost:$HOST_PORT/api/health"
+}
+
 case "$cmd" in
   build)
     $DC build "$@"
     ;;
   up)
-    # 启动前检测宿主端口是否已被占用
-    if command -v ss >/dev/null 2>&1 && ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE ":${HOST_PORT}\$"; then
-      echo "Error: 宿主机端口 $HOST_PORT 已被占用,改 .env 的 HOST_PORT 后再试" >&2
-      ss -lntp 2>/dev/null | grep ":${HOST_PORT} " || true
-      exit 1
-    fi
-    echo "==> 启动服务,宿主机映射端口: $HOST_PORT(容器内 3000)"
-    $DC up -d "$@"
-    sleep 2
-    $DC ps
-    echo "==> 健康检查: curl http://localhost:$HOST_PORT/api/health"
+    do_up "$@"
     ;;
   down)
     $DC down "$@"
@@ -66,12 +70,10 @@ case "$cmd" in
     $DC ps
     ;;
   deploy)
-    # 一键升级:git pull + 构建 + 启动
+    # 一键升级:git pull + 构建 + 启动(走端口检测)
     git pull
     $DC build
-    $DC up -d
-    sleep 2
-    $DC ps
+    do_up
     ;;
   shell|sh)
     $DC exec mockforge sh

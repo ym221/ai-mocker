@@ -1,169 +1,112 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
-const GUIDE_MARKDOWN = `# MockForge MCP — 给 AI 助手的使用指南
+const GUIDE_MARKDOWN = `# MockForge MCP
 
-> 你（IDE 里的 AI）通过 MCP 访问 MockForge。本指南告诉你怎么高效组合工具跑完"从需求到交接"整条闭环。
+让 Coding Agent 从自然语言或 OpenAPI 直接生成可访问的 Mock REST 服务。每个模块对外暴露一个 \`mockBaseUrl\` —— 形如 \`<当前 MCP server 部署地址>/mock/<basePath>\`（例：你连的 MCP 是 \`http://localhost:3000\` 时，order 模块的 \`mockBaseUrl\` 就是 \`http://localhost:3000/mock/order\`）。每个模块含 CRUD + 业务规则 + Mock 数据。
 
-## MockForge 是什么
+## 工具耗时（先看这里）
 
-MockForge 是 AI 驱动的 **Mock API 服务**。用户在 Web UI 对话生成 Mock 模块，每个模块由五件套构成：
-\`controller.ts\` / \`schema.sql\` / \`_meta.json\` / \`test.ts\` / \`api-doc.md\`，通过 \`/mock/<basePath>\` 动态路由对外提供 REST 端点。
+| 类型 | 耗时 | 工具 |
+|------|------|------|
+| 读 | <1s | \`list_modules\` \`inspect_module\` \`get_mock_access_log\` \`diff_with_openapi\` \`get_session_status\` |
+| 数据 / 测试 / 删除 | <30s | \`manage_data\` \`run_test\` \`delete_module\` \`cancel_session\` \`generate_handoff_report\` |
+| **AI 生成新模块** | **7-12 min** | \`create_module_from_spec\` |
+| **AI 修改模块** | **2-10 min** | \`update_module\` — 小改 2-5min / 大改 5-10min（含内部测试 + 修复循环） |
 
-你当前连接的是**某个用户**的上下文。看到的、能修改的都是这个用户的模块，互不干扰。
+> 增删改数据走 \`manage_data\` 直连 DB，30 秒内完成；只有 \`create_module_from_spec\` / \`update_module\` 走 LLM，是分钟级。
 
-## ⚡ 单模块单流程 + 自动续接（Step-MCP-5，必读）
+## ⚡ 长任务策略：异步并行 + 自动续接
 
-每个模块同时只能有 1 个 create/update 在跑。重要规则：
+调 \`create_module_from_spec\` / \`update_module\` 期间**不要空转**：
 
-### 推荐流程：naive 重发即可
-
-1. 调 \`update_module({ moduleName, instruction })\`
-2. 默认阻塞最多 \`waitMaxSec\` 秒（默认 180，上限 300）
-3. 完成 → 返 \`{ status:"updated", ... }\`
-4. 超时仍在跑 → 返 \`{ sessionId, status:"still-running", stage, elapsedSec }\`
-   → 直接**重发同样的 update_module**（同 moduleName 同 instruction）
-   → server 默认 attach 到那个在跑的 session，继续等
-   → 直到拿到 \`status:"updated"\`
-
-### 客户端 timeout 后自动续接
-
-- 你（IDE client）的 transport 断了不要紧，server-side runner 不受影响
-- 重发同样的 \`update_module\` → server 检测到 in-flight → 自动 attach
-- 响应里 \`attached: true\` 表示是 attach 上去的
-
-### 不要对同一模块重试不同的 instruction
-
-- 默认 \`resume\` 行为下，不同 instruction 仍会 attach（拿到旧的结果），
-  响应里会有 \`warning\` + \`actualInstruction\` + \`yourInstruction\` 字段告诉你不一致
-- 如果你确实想换内容：先 \`cancel_session(sid)\` 再发新指令；
-  或一步到位：\`update_module({ ..., onConflict: 'replace' })\`
-
-### onConflict 三个选项
-
-- \`'resume'\` (**默认**) — 有 in-flight 就 attach，拿到它的结果
-- \`'reject'\` — 有 in-flight 就拒绝（返 \`MOCKFORGE_ALREADY_PROCESSING\`），你自己决定
-- \`'replace'\` — 有 in-flight 就 cancel 它 + 启新
-
-### 并发限制
-
-- per-user 同时 3 个 session（\`MCP_USER_CONCURRENCY_LIMIT\`）
-- 全局同时 10 个 session（\`MCP_GLOBAL_CONCURRENCY_LIMIT\`）
-- 超限返 \`MOCKFORGE_BUSY\`，响应里列出 \`runningSessions\` 让你决定
-- **attach 不计数**（不会因为重发而误触发 BUSY）
-
-### Session 观察 + 放弃
-
-- \`get_session_status(sessionId)\` — 5ms 轻量查状态（不阻塞），拿 status/stage/elapsedSec/recentEvents
-- \`cancel_session(sessionId)\` — 主动放弃，成功返回 status:"aborted"
+- **已知接口形状** → 直接写业务代码，不必等模块完全 ready
+- **需要契约** → 生成中也能 \`inspect_module(moduleName, view:'openapi')\` 拿到当前草稿
+- **续接**：默认 \`waitMaxSec=180\`（上限 300），超时返 \`{ sessionId, status:"still-running", stage, elapsedSec }\`
+  - 重发**同样参数** → 自动 attach 到在跑的 session（不重复创建，\`attached:true\`）
+  - 或 polling \`get_session_status(sessionId)\`（5ms 非阻塞快照）
+  - 客户端 transport 断了不要紧，server-side 任务继续跑，重发即续接
 
 ## 12 个工具
 
-### 读
-- \`list_modules\` — 列出当前用户的所有模块（name / status / health / endpoints / mockBaseUrl）
-- \`inspect_module(moduleName, view?)\` — 一次拿模块的 API doc / OpenAPI / 健康状态(view: 'all'|'doc'|'openapi'|'health',默 all)
-- \`get_mock_access_log\` — 查业务代码最近打到 Mock 的真实请求和响应
-- \`diff_with_openapi\` — 把实际请求/响应与契约做结构化 diff
+**读**
+- \`list_modules\` — 列出所有模块（name / status / health / endpoints / mockBaseUrl）
+- \`inspect_module(moduleName, view?)\` — view: \`all|doc|openapi|health\`（默认 all）
+- \`get_mock_access_log(moduleName)\` — 业务代码最近打到 Mock 的真实请求/响应
+- \`diff_with_openapi(moduleName, actualRequest, actualResponse)\` — 实际 vs 契约结构化 diff
 
-### 写（轻量，即时生效）
-- \`manage_data\` — 造数/增删改查数据（insert / bulk_generate / list / update / delete / batch_delete / clear）
-- \`run_test\` — 跑模块的 test.ts 回归
-- \`delete_module\` — **不可逆**删模块
+**写（轻量，秒级，不走 LLM）**
+- \`manage_data\` — \`insert | update | delete | list | batch_delete | clear | bulk_generate\`
+- \`run_test(moduleName)\` — 跑模块自带回归
+- \`delete_module(moduleName)\` — 不可逆
 
-### 写（重量，触发 AI 生成）
-- \`create_module_from_spec\` — 从 OpenAPI/YAML/自然语言生成新模块；接受 \`waitMaxSec\` / \`onConflict\` / \`dry_run\`
-- \`update_module\` — 用自然语言指令修改已有模块；接受 \`waitMaxSec\` / \`onConflict\` / \`dry_run\`
+**写（AI 生成，分钟级）**
+- \`create_module_from_spec({ spec, moduleName, dry_run?, waitMaxSec?, onConflict?, provider?, model?, preset? })\`
+- \`update_module({ moduleName, instruction, dry_run?, waitMaxSec?, onConflict?, provider?, model?, preset? })\`
 
-### 会话（Step-MCP-5 新增）
-- \`get_session_status\` — 查询某个 session 的当前状态（非阻塞 5ms 快照）
-- \`cancel_session\` — 主动放弃一个在跑的 session
+**会话**
+- \`get_session_status(sessionId)\` / \`cancel_session(sessionId)\`
 
-### 汇报
-- \`generate_handoff_report\` — 输出 Markdown 交接报告（契约 + 健康度 + 访问日志 + 后端建议）
+**交付**
+- \`generate_handoff_report(moduleName)\` — 给后端的交接 markdown
 
-## 推荐工作流
+## 没有接口文档时：A 一把梭 / B 你先出 spec
 
-\`\`\`
-① 新需求进来：看有没有可复用的
-   → list_modules
+> 心智锚点：MCP 后端默认走**成本优先模型**（免费 gemma 系，中等偏弱）。决策按你（user 端 Agent）的模型档位选。
 
-② 没有 → 从 PRD 或已有 OpenAPI 生成 Mock
-   → create_module_from_spec({ spec, moduleName })     // 可先 dry_run:true 预览
-     - 完成 → 拿 mockBaseUrl，在业务代码里代理到这个地址
-     - 超时仍在跑 → 用同样的参数重发一次即可 attach + 继续等
-   → 拿 mockBaseUrl，在业务代码里代理到这个地址
+**模式 A — 丢需求文本给 MCP**：\`create_module_from_spec({ spec: "<自然语言需求>", moduleName })\`
+适合：CRUD 套路 / 简单规则 / 你的模型档位 ≤ MCP 默认。
 
-③ 有 → 拿契约写业务代码
-   → inspect_module({ moduleName, view: 'openapi' })   // 生成请求类型、客户端
+**模式 B — 你先出 spec**（推荐当你 ≥ Claude Sonnet 4 / GPT-4o 档）：
+1. 你（user Agent）基于 PRD 自己生成 OpenAPI YAML 或 Markdown spec
+2. \`create_module_from_spec({ spec: "<你的 spec>", moduleName })\` 让 MCP 只做实现
+3. **生成期间你拿自己的 spec 直接写业务代码**——这才是真正的异步并行（不必等 MCP）
+4. MCP 完成后业务代码切到 \`mockBaseUrl\` 联调
 
-④ 写完业务代码，跑业务测试
+**临时换 MCP 后端模型**：两个生成工具都接受 \`provider\` / \`model\` / \`preset\`（user-owned 或 public scope 的 provider id/name），可临时覆盖默认。例：\`{ ..., provider: "anthropic", model: "claude-sonnet-4-6" }\`。
 
-⑤ 测试失败？定位根因：
-   → get_mock_access_log({ moduleName })               // 看业务真的发了什么
-   → diff_with_openapi({ moduleName, actualRequest, actualResponse })
-                                                        // 看契约在哪儿对不齐
-   → 根据 diff 判断：
-     - kind=missing-in-actual → 业务代码漏字段，改业务
-     - kind=missing-in-spec    → 契约漏字段，改 Mock（update_module）
-     - kind=type-mismatch      → 看类型谁对，改对应侧
-     - kind=endpoint-not-in-spec → 业务路径写错 或 Mock 少端点
+## 典型流程
 
-⑥ Mock 需要改
-   → update_module({ moduleName, instruction })        // 可先 dry_run:true
-     - 超时仍在跑 → 重发同样参数继续等
-   → run_test({ moduleName })                          // 验证改动没坏别的
+1. \`list_modules\` 找可复用的
+2. 没有 → \`create_module_from_spec\`（**同时并行写业务代码**，不要等）
+3. 业务测试失败 → \`get_mock_access_log\` + \`diff_with_openapi\` 定位是契约还是业务侧问题
+4. 改 Mock → \`update_module\` → \`run_test\` 验证
+5. 造数（UI 展示 / 压测）→ \`manage_data({ action:'bulk_generate', count })\`
+6. 交付 → \`generate_handoff_report\`
 
-⑦ 回到 ④，循环到测试全绿
+## 关键约定
 
-⑧ 需要造数做 UI 展示 或 跑压力测试
-   → manage_data({ action:'bulk_generate', count:50 })
+- \`moduleName\` 大小写敏感
+- \`mockBaseUrl\` 是完整 URL，直接用，不要再拼 \`/mock\`
+- 所有实体自动含 \`id\` / \`created_at\` / \`updated_at\`
+- 响应信封 \`{ success, message, data }\`；list 端点 data 是 \`{ list, total, page, pageSize }\`
+- 优先读 \`structuredContent\`（机读），\`content[0].text\` 是给人看的
+- \`dry_run:true\` → 只解析校验不落地，先确认再真跑
 
-⑨ 跟后端交接
-   → generate_handoff_report({ moduleName })
-   → 把返回的 markdown 给后端团队
-\`\`\`
+## 接入业务代码（必读）
 
-## 关键规范
+\`mockBaseUrl\` 跟业务代码原本的后端**不在同源**（host/port 不同），直接 fetch 会跨域。两种接法：
 
-- **moduleName** 大小写敏感，与 \`_meta.json\` 的 \`name\` 一致
-- **mockBaseUrl** 是可直接用的完整 URL（如 \`http://localhost:3000/mock/order\`），不要再拼接 \`/mock\`
-- 所有实体自动包含 \`id\` / \`created_at\` / \`updated_at\` 三个字段，OpenAPI 里也有
-- 响应统一 \`{ success, message, data }\` 信封；list 端点 data 是 \`{ list, total, page, pageSize }\`
+- **换 baseURL**：业务的 axios/fetch 客户端 \`baseURL\` 直接设为 \`mockBaseUrl\`（适合纯前端原型 / Node 端调用）
+- **开发代理**（推荐，业务代码零改动）：在 dev server 把业务的 \`/api/*\` 转发到 \`mockBaseUrl\`
+  - Vite：\`vite.config.ts\` 的 \`server.proxy['/api'] = { target: '<MCP host>', rewrite: p => p.replace(/^\\/api/, '/mock/<basePath>') }\`
+  - Next.js：\`next.config.js\` 的 \`rewrites\`，\`source: '/api/:path*'\` → \`destination: '<mockBaseUrl>/:path*'\`
+  - webpack devServer / CRA \`setupProxy.js\` / nginx \`proxy_pass\` 同理
 
-## 长任务的进度反馈
+**关键**：转发后到 MCP 的最终 URL 必须保留 \`/mock/<basePath>\` 前缀，否则 mock-router 匹配不到端点。
 
-\`create_module_from_spec\` / \`update_module\` 会调 LLM，执行时间秒到分钟不等。你通过 MCP 协议的 **progress notifications** 收到阶段进度（thinking / writing / tool / module_update / heartbeat 五种阶段），不原样转发 LLM 产生的内容。heartbeat 每 30 秒一次让 client transport 不会 idle 断。
+## onConflict（同模块已有任务在跑时）
 
-## 软 warnings
+- \`'resume'\`（默认）— attach 到在跑的，拿它的结果（\`actualInstruction\` ≠ \`yourInstruction\` 时附 \`warning\`）
+- \`'reject'\` — 返 \`MOCKFORGE_ALREADY_PROCESSING\`，你自己决定
+- \`'replace'\` — cancel 旧的再启新的
 
-短期内对同一模块调 \`update_module\` 超过 10 次，返回会带 \`warnings: [{ code:"HIGH_RETRY_COUNT", ... }]\`，**不阻断**调用，但提示你可能陷入错误循环，建议先看 \`get_mock_access_log\` 和 \`inspect_module({ view: 'health' })\` 诊断。
+## 错误码
 
-## dry_run 语义
+错误响应 \`isError:true\`，\`structuredContent.{ code, hint, recovery_steps }\`：
 
-- \`create_module_from_spec({ dry_run: true })\` 纯解析 spec，返回将创建的 moduleName / entities / endpoints，不动 DB/FS
-- \`update_module({ dry_run: true })\` 校验模块存在，返回当前端点清单，供你向用户确认再真跑
+\`MOCKFORGE_BUSY\`（per-user 3 / 全局 10 并发超限）/ \`MOCKFORGE_ALREADY_PROCESSING\`（仅 reject 模式）/ \`MOCKFORGE_MODULE_NOT_FOUND\` / \`MOCKFORGE_SESSION_NOT_FOUND\` / \`MOCKFORGE_NO_PROVIDER\` / \`MOCKFORGE_VALIDATION_FAILED\` / \`MOCKFORGE_WAIT_TIMEOUT\` / \`MOCKFORGE_INTERNAL_ERROR\`。
 
-## 错误响应
-
-所有错误响应 \`isError: true\` 的 \`structuredContent\` 都带统一字段：
-- \`code\` — 机器可判别：
-  - \`MOCKFORGE_BUSY\` — 并发超限，看 runningSessions 决定
-  - \`MOCKFORGE_ALREADY_PROCESSING\` — 同模块有在跑（仅 onConflict=reject 才返）
-  - \`MOCKFORGE_MODULE_NOT_FOUND\` — moduleName 错
-  - \`MOCKFORGE_SESSION_NOT_FOUND\` — sessionId 错
-  - \`MOCKFORGE_NO_PROVIDER\` — server 没配 AI provider
-  - \`MOCKFORGE_VALIDATION_FAILED\` — 参数格式/校验失败
-  - \`MOCKFORGE_WAIT_TIMEOUT\` — 写工具终态非 done（不等同于 still-running）
-  - \`MOCKFORGE_INTERNAL_ERROR\` — server 内部错误
-- \`hint\` — 下一步行动建议（给你看的）
-- 其它具体字段（scope / moduleName / existingSessionId / runningSessions 等）
-
-## 返回值约定
-
-所有工具都同时返回：
-- \`content[0].text\`：人类可读摘要（markdown 或格式化 JSON）
-- \`structuredContent\`：机器可读结构化数据（优先用这个做判断）
-
-优先读 \`structuredContent\`，把 \`content\` 留给展示给人。
+每条错误都附 \`recovery_steps\`（机读：下一步该调什么工具）。
 `;
 
 export function registerGuideResource(server: McpServer): void {
@@ -173,7 +116,7 @@ export function registerGuideResource(server: McpServer): void {
     {
       title: 'MockForge Usage Guide',
       description:
-        'Required reading for any AI using MockForge MCP. Tool catalog, recommended workflow, diff decision tree, progress / warnings semantics, and the attach-on-resend resumability model.',
+        'Read first. Tool catalog with timing tiers, async strategy for 7-12min generation tasks, attach-on-resend resume model, error codes with recovery_steps.',
       mimeType: 'text/markdown',
     },
     async (uri) => ({

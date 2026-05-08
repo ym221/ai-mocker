@@ -36,13 +36,32 @@ fi
 cmd="${1:-help}"
 shift || true
 
-# 抽出端口检测 + up 流程,deploy 子命令也用
+# 项目名(docker-compose 默认用目录名 lowercase)
+PROJECT="$(basename "$PWD" | tr '[:upper:]' '[:lower:]')"
+
+# 清理本项目残留的容器(保留 volumes / images / networks)
+# 用途 1:Docker 23+ 上 docker-compose v1 recreate 时撞 ContainerConfig bug 的根治
+# 用途 2:手动恢复"启动失败留下死容器"等异常状态
+do_clean() {
+  local containers
+  containers=$(docker ps -aq --filter "label=com.docker.compose.project=${PROJECT}" 2>/dev/null || true)
+  if [[ -n "$containers" ]]; then
+    echo "==> 清理本项目残留容器: $containers"
+    docker rm -f $containers >/dev/null
+  else
+    echo "==> 无残留容器"
+  fi
+}
+
+# 抽出端口检测 + 自动清理 + up 流程,deploy 子命令也用
 do_up() {
   if command -v ss >/dev/null 2>&1 && ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE ":${HOST_PORT}\$"; then
     echo "Error: 宿主机端口 $HOST_PORT 已被占用,改 .env 的 HOST_PORT 后再试" >&2
     ss -lntp 2>/dev/null | grep ":${HOST_PORT} " || true
     return 1
   fi
+  # 启动前自动清理(避免 v1 + Docker 23+ recreate 路径的 ContainerConfig bug)
+  do_clean
   echo "==> 启动服务,宿主机映射端口: $HOST_PORT(容器内 3000)"
   $DC up -d "$@"
   sleep 2
@@ -59,6 +78,9 @@ case "$cmd" in
     ;;
   down)
     $DC down "$@"
+    ;;
+  clean)
+    do_clean
     ;;
   restart)
     $DC restart "$@"
@@ -96,8 +118,9 @@ MockForge 部署脚本(自动适配 docker compose v1/v2)
 
 命令:
   build       构建镜像
-  up          启动服务(后台,会检测端口占用)
+  up          启动服务(后台,自动 clean + 检测端口)
   down        停止并移除容器(数据卷保留)
+  clean       强删本项目残留容器(volumes/images 不动)
   restart     重启服务
   logs        实时日志(Ctrl+C 退出)
   ps          容器状态

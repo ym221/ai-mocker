@@ -1,8 +1,28 @@
+# deps
 node_modules/
-dist/
-data/
-uploads/
-generated/
+
+# build / runtime output（/ 前缀 = 仅匹配仓库根，避免误伤同名子目录）
+/dist/
+/data/
+/generated/
+/uploads/
+
+# secrets
 .env
+.env.local
 *.db
+
+# tests
 tests/.auth/
+test-results/
+playwright-report/
+coverage/
+
+# IDE / tool local
+.claude/settings.local.json
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -2,7 +2,10 @@ services:
   mockforge:
     build: .
     ports:
-      - "3000:3000"
+      # HOST_PORT 控制宿主机端口；容器内固定 3000。
+      # 默认 9020（阿里云此服务器开放 9000-9099）。本地开发不设置时同样用 9020；
+      # 想沿用 3000 → 在 .env 加 HOST_PORT=3000。
+      - "${HOST_PORT:-9020}:3000"
     volumes:
       - mockforge-data:/app/data
       - mockforge-uploads:/app/uploads

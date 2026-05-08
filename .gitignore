@@ -5,3 +5,4 @@ uploads/
 generated/
 .env
 *.db
+tests/.auth/

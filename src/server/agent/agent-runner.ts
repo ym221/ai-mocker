@@ -1,12 +1,11 @@
 import { streamText, stepCountIs, type CoreMessage } from 'ai';
-import { createOpenAI } from '@ai-sdk/openai';
+import { buildModel } from './lib/build-model.js';
 import { db } from '../core/database.js';
 import { providers, presets, sessions, messages, modules } from '../core/schema.js';
 import { decrypt } from '../core/encryption.js';
 import { eq, and } from 'drizzle-orm';
 import { buildSystemPrompt } from './system-prompt.js';
 import { buildTools } from './tool-registry.js';
-import { createCompatFetch } from './compat-fetch.js';
 import { readFileSync, existsSync } from 'fs';
 import { resolve, join } from 'path';
 
@@ -51,14 +50,13 @@ export async function runAgent({ sessionId, userId, userMessages, abortSignal }:
     throw new Error('AI Provider API Key is not configured. Please go to Settings → AI Providers to add your API key.');
   }
 
-  // Create AI model with compat fetch to fix non-standard SSE formats
-  const openai = createOpenAI({
+  // Build LanguageModel by provider.type(支持 OpenAI / Anthropic 协议)
+  const model = buildModel({
+    type: provider.type,
     apiKey,
-    baseURL: provider.baseUrl || undefined,
-    compatibility: 'compatible',
-    fetch: createCompatFetch(provider.baseUrl || undefined),
+    baseUrl: provider.baseUrl,
+    modelName: session.model || provider.defaultModel,
   });
-  const model = openai.chat(session.model || provider.defaultModel);
 
   // Load preset
   let preset = null;

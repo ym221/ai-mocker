@@ -21,6 +21,17 @@ services:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
       - ALLOW_REGISTRATION=true
+      # AI 默认 Provider(.env 兜底配置;首次启动时自动创建一条 scope=public 的 provider)
+      - DEFAULT_AI_PROVIDER=${DEFAULT_AI_PROVIDER:-}
+      - DEFAULT_AI_MODEL=${DEFAULT_AI_MODEL:-}
+      - DEFAULT_AI_BASE_URL=${DEFAULT_AI_BASE_URL:-}
+      - DEFAULT_AI_API_KEY=${DEFAULT_AI_API_KEY:-}
+      # MCP API Key HMAC 密钥(MCP 鉴权用)
+      - MCP_API_KEY_SECRET=${MCP_API_KEY_SECRET:-}
+      # 出境代理(可选;不设则不走代理)
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
     restart: unless-stopped
 
 volumes:

@@ -10,7 +10,7 @@
 
 import { EventEmitter } from 'events';
 import { streamText, stepCountIs, type CoreMessage } from 'ai';
-import { createOpenAI } from '@ai-sdk/openai';
+import { buildModel } from './lib/build-model.js';
 import { eq, and, desc, gt } from 'drizzle-orm';
 import { readFileSync, existsSync } from 'fs';
 import { resolve, join } from 'path';
@@ -20,7 +20,6 @@ import { decrypt } from '../core/encryption.js';
 import { computeModuleHealth } from '../core/module-health.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { buildTools } from './tool-registry.js';
-import { createCompatFetch } from './compat-fetch.js';
 import { ThinkingParser } from './thinking-adapter.js';
 import { buildProviderOptions, reportCacheSupport } from './prompt-cache.js';
 import { decideWatchdog, buildNudgeMessage } from './watchdog.js';
@@ -679,13 +678,12 @@ export class ChatRunner {
       }
       if (!apiKey) throw new Error('AI Provider API Key is not configured.');
 
-      const openai = createOpenAI({
+      const model = buildModel({
+        type: provider.type,
         apiKey,
-        baseURL: provider.baseUrl || undefined,
-        compatibility: 'compatible',
-        fetch: createCompatFetch(provider.baseUrl || undefined),
+        baseUrl: provider.baseUrl,
+        modelName: session.model || provider.defaultModel,
       });
-      const model = openai.chat(session.model || provider.defaultModel);
 
       // ===== Preset / module context =====
       let preset = null;

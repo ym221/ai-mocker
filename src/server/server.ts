@@ -46,22 +46,36 @@ async function seedDatabase() {
     console.log(`Admin user "${adminUsername}" created`);
   }
 
-  // Seed test provider
+  // Seed test provider — env 兜底配置
   const existingProvider = db.select().from(providers).where(eq(providers.id, 1)).get();
+  const defaultApiKey = process.env.DEFAULT_AI_API_KEY || '';
+  const defaultType = process.env.DEFAULT_AI_PROVIDER || 'openai';
+  const defaultBaseUrl = process.env.DEFAULT_AI_BASE_URL || null;
+  const defaultModel = process.env.DEFAULT_AI_MODEL || 'gpt-4o-mini';
+
   if (!existingProvider) {
-    const defaultApiKey = process.env.DEFAULT_AI_API_KEY || '';
     db.insert(providers).values({
       name: 'Default Provider',
-      type: process.env.DEFAULT_AI_PROVIDER || 'openai',
+      type: defaultType,
       apiKeyEncrypted: defaultApiKey ? encrypt(defaultApiKey) : null,
-      baseUrl: process.env.DEFAULT_AI_BASE_URL || null,
-      defaultModel: process.env.DEFAULT_AI_MODEL || 'gpt-4o-mini',
+      baseUrl: defaultBaseUrl,
+      defaultModel: defaultModel,
       scope: 'public',
       ownerId: 1,
       isVerified: 0,
       isActive: 1,
     }).run();
     console.log('Default AI provider created');
+  } else if (defaultApiKey && !existingProvider.apiKeyEncrypted) {
+    // 兼容场景:之前启动时 env 没传(docker-compose 未注入),DB 里建了空 key 占位;
+    // 现在 env 有值了,自动回填,免得用户手动删 volume。
+    db.update(providers).set({
+      apiKeyEncrypted: encrypt(defaultApiKey),
+      type: defaultType,
+      baseUrl: defaultBaseUrl,
+      defaultModel: defaultModel,
+    }).where(eq(providers.id, 1)).run();
+    console.log('Default AI provider key backfilled from env');
   }
 }
 

@@ -54,6 +54,15 @@ async function seedDatabase() {
       role: 'admin',
     }).run();
     console.log(`Admin user "${adminUsername}" created`);
+  } else if (existing.role !== 'admin' || existing.isActive !== 1) {
+    // Idempotent admin restore: 即使 admin 之前被误降级/禁用,启动时自动恢复 role=admin + isActive=1。
+    // 这是系统级"自愈"——.env 配置的 admin 始终保持管理员身份,避免误操作把所有人锁在外面。
+    db.update(users).set({
+      role: 'admin',
+      isActive: 1,
+      updatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
+    }).where(eq(users.id, existing.id)).run();
+    console.log(`[seed] admin user "${adminUsername}" auto-restored to role=admin / active=1 (was role=${existing.role}, active=${existing.isActive})`);
   }
 
   // Seed test provider — env 兜底配置

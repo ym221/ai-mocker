@@ -53,15 +53,44 @@ do_clean() {
   fi
 }
 
+# 检查端口是否被监听
+port_in_use() {
+  command -v ss >/dev/null 2>&1 && \
+    ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE ":${HOST_PORT}\$"
+}
+
 # 抽出端口检测 + 自动清理 + up 流程,deploy 子命令也用
+# 行为:端口被本项目容器占 → 自动清理;被其他服务占 → 拒绝,显示占用者
 do_up() {
-  if command -v ss >/dev/null 2>&1 && ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE ":${HOST_PORT}\$"; then
-    echo "Error: 宿主机端口 $HOST_PORT 已被占用,改 .env 的 HOST_PORT 后再试" >&2
-    ss -lntp 2>/dev/null | grep ":${HOST_PORT} " || true
-    return 1
+  if port_in_use; then
+    # 端口被占,识别是不是本项目容器(用 compose project label 严格过滤,不动其他服务)
+    local owner
+    owner=$(docker ps --filter "label=com.docker.compose.project=${PROJECT}" \
+      --format '{{.ID}} {{.Names}} {{.Ports}}' 2>/dev/null | grep ":${HOST_PORT}->" || true)
+    if [[ -n "$owner" ]]; then
+      echo "==> 端口 $HOST_PORT 被本项目旧容器占用,自动清理:"
+      echo "$owner" | awk '{print "    -",$2,"(id="$1")"}'
+      do_clean
+      # 等几秒让 OS 释放端口(docker rm 是同步的,但偶有延迟)
+      local i=0
+      while port_in_use && (( i < 5 )); do
+        sleep 1
+        i=$((i + 1))
+      done
+      if port_in_use; then
+        echo "Error: 清理本项目容器后端口 $HOST_PORT 仍被占用(等了 ${i}s),可能有非容器进程残留" >&2
+        ss -lntp 2>/dev/null | grep ":${HOST_PORT} " || true
+        return 1
+      fi
+    else
+      echo "Error: 宿主机端口 $HOST_PORT 被非本项目服务占用,改 .env 的 HOST_PORT 后再试" >&2
+      ss -lntp 2>/dev/null | grep ":${HOST_PORT} " || true
+      return 1
+    fi
+  else
+    # 端口空着,顺手清残留(stopped 容器仍占用 compose 名称,会让 up 报 conflict)
+    do_clean
   fi
-  # 启动前自动清理(避免 v1 + Docker 23+ recreate 路径的 ContainerConfig bug)
-  do_clean
   echo "==> 启动服务,宿主机映射端口: $HOST_PORT(容器内 3000)"
   $DC up -d "$@"
   sleep 2

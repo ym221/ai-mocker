@@ -14,6 +14,8 @@ export const users = sqliteTable('users', {
   apiKeyLastUsedAt: text('api_key_last_used_at'),
   // 用户级偏好:默认 provider id(可空,空则 fallback 到系统 seed 的 id=1)
   defaultProviderId: integer('default_provider_id'),
+  // 创建人:null = 系统 seed(super-admin 自身),数字 = 创建他的 user id
+  createdBy: integer('created_by'),
   createdAt: text('created_at').default(sql`(datetime('now'))`),
   updatedAt: text('updated_at').default(sql`(datetime('now'))`),
 });

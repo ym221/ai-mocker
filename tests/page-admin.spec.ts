@@ -15,13 +15,14 @@ test.describe('管理页 - UI 渲染', () => {
   test('A02 用户表格结构', async ({ page }) => {
     await page.goto('/admin');
     await page.waitForTimeout(500);
-    // 表头含 5 列
+    // 表头含 6 列(ID / 用户名 / 角色 / 状态 / 创建人 / 操作)
     const headers = page.locator('thead th');
     await expect(headers.nth(0)).toContainText('ID');
     await expect(headers.nth(1)).toContainText('用户名');
     await expect(headers.nth(2)).toContainText('角色');
     await expect(headers.nth(3)).toContainText('状态');
-    await expect(headers.nth(4)).toContainText('操作');
+    await expect(headers.nth(4)).toContainText('创建人');
+    await expect(headers.nth(5)).toContainText('操作');
   });
 
   test('A03 角色徽章颜色', async ({ page }) => {
@@ -110,6 +111,86 @@ test.describe('管理页 - 用户管理交互', () => {
     await expect(demoteBtn).toBeDisabled();
     await expect(disableBtn).toBeDisabled();
     await expect(deleteBtn).toBeDisabled();
+  });
+
+  test('A12 系统管理员(id=1)的 createdByUsername=system', async () => {
+    const { getToken, apiRequest } = await import('./helpers');
+    const token = await getToken();
+    const r = await apiRequest('GET', '/api/users', token);
+    expect(r.status).toBe(200);
+    const admin = r.data.data.find((u: any) => u.id === 1);
+    expect(admin).toBeTruthy();
+    expect(admin.createdByUsername).toBe('system');
+    expect(admin.createdBy).toBeNull();
+  });
+
+  test('A13 super-admin POST 创建用户 → createdBy = caller.id, createdByUsername = caller.username', async () => {
+    const { getToken, apiRequest } = await import('./helpers');
+    const token = await getToken();
+    const username = `a13-test-${Date.now().toString(36)}`;
+    const r = await apiRequest('POST', '/api/users', token, {
+      username, password: 'pwd123', role: 'user',
+    });
+    expect(r.status).toBe(201);
+    expect(r.data.data.createdBy).toBe(1);
+
+    try {
+      const list = await apiRequest('GET', '/api/users', token);
+      const created = list.data.data.find((u: any) => u.username === username);
+      expect(created.createdByUsername).toBe('admin');
+    } finally {
+      await apiRequest('DELETE', `/api/users/${r.data.data.id}`, token);
+    }
+  });
+
+  test('A14 非 super-admin 不能创建 admin 角色用户(403)', async () => {
+    const { getToken, apiRequest } = await import('./helpers');
+    const adminToken = await getToken();
+
+    // super-admin 先创建一个普通 admin 助手
+    const helperName = `a14-helper-${Date.now().toString(36)}`;
+    const helper = await apiRequest('POST', '/api/users', adminToken, {
+      username: helperName, password: 'pwd123', role: 'admin',
+    });
+    expect(helper.status).toBe(201);
+    const helperId = helper.data.data.id;
+
+    try {
+      // 用 helper(普通 admin)登录拿 token
+      const helperToken = await getToken(helperName, 'pwd123');
+      // helper 想创建 admin 用户 → 应被拒绝
+      const r = await apiRequest('POST', '/api/users', helperToken, {
+        username: `a14-target-${Date.now().toString(36)}`,
+        password: 'pwd123',
+        role: 'admin',
+      });
+      expect(r.status).toBe(403);
+      expect(r.data.message).toMatch(/系统管理员|管理员账户/);
+
+      // helper 创建普通用户 → 允许
+      const targetName = `a14-user-${Date.now().toString(36)}`;
+      const r2 = await apiRequest('POST', '/api/users', helperToken, {
+        username: targetName, password: 'pwd123', role: 'user',
+      });
+      expect(r2.status).toBe(201);
+      expect(r2.data.data.role).toBe('user');
+      expect(r2.data.data.createdBy).toBe(helperId);
+      // cleanup
+      await apiRequest('DELETE', `/api/users/${r2.data.data.id}`, adminToken);
+    } finally {
+      await apiRequest('DELETE', `/api/users/${helperId}`, adminToken);
+    }
+  });
+
+  test('A15 UI 表格"创建人"列展示', async ({ page }) => {
+    await page.goto('/admin');
+    await page.waitForSelector('[data-testid="user-row-1"]', { timeout: 5000 });
+    // 表头有"创建人"
+    const thead = page.locator('thead');
+    await expect(thead).toContainText('创建人');
+    // admin row 创建人显示 system
+    const row = page.locator('[data-testid="user-row-1"]');
+    await expect(row).toContainText('system');
   });
 
   test('A09 启用用户', async ({ page }) => {

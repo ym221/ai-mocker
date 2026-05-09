@@ -21,7 +21,9 @@ function isProtected(u: any): boolean {
   return u?.id === 1;
 }
 
-const currentUserId = computed(() => authStore.user?.id);
+const currentUserId = computed(() => authStore.currentUser?.id);
+/** 当前登录者是否是系统超级管理员(id=1)— 决定是否能创建/升级 admin 角色 */
+const isSuperAdmin = computed(() => currentUserId.value === 1);
 
 async function fetchUsers() {
   try {
@@ -111,6 +113,7 @@ onMounted(fetchUsers);
             <th class="px-4 py-2 text-left">用户名</th>
             <th class="px-4 py-2 text-left">角色</th>
             <th class="px-4 py-2 text-left">状态</th>
+            <th class="px-4 py-2 text-left">创建人</th>
             <th class="px-4 py-2 text-left">操作</th>
           </tr>
         </thead>
@@ -139,13 +142,25 @@ onMounted(fetchUsers);
                 {{ u.isActive ? '正常' : '已禁用' }}
               </span>
             </td>
+            <td class="px-4 py-2 text-xs">
+              <span
+                v-if="u.createdByUsername === 'system'"
+                class="text-yellow-600"
+                title="系统种子创建"
+              >system</span>
+              <span v-else class="text-muted-foreground">{{ u.createdByUsername }}</span>
+            </td>
             <td class="px-4 py-2 space-x-2">
               <Button
                 size="sm"
                 variant="outline"
                 @click="toggleRole(u)"
-                :disabled="isProtected(u)"
-                :title="isProtected(u) ? '系统管理员不可降级' : ''"
+                :disabled="isProtected(u) || (!isSuperAdmin && u.role !== 'admin')"
+                :title="
+                  isProtected(u) ? '系统管理员不可降级' :
+                  (!isSuperAdmin && u.role !== 'admin') ? '只有系统管理员可授予管理员权限' :
+                  ''
+                "
               >
                 {{ u.role === 'admin' ? '降级' : '升级' }}
               </Button>
@@ -198,10 +213,18 @@ onMounted(fetchUsers);
         </div>
         <div>
           <label class="text-sm font-medium">角色</label>
-          <select v-model="createForm.role" class="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+          <select
+            v-model="createForm.role"
+            class="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm disabled:opacity-50"
+            :disabled="!isSuperAdmin"
+            :title="isSuperAdmin ? '' : '只有系统管理员可创建管理员账户'"
+          >
             <option value="user">普通用户</option>
-            <option value="admin">管理员</option>
+            <option v-if="isSuperAdmin" value="admin">管理员</option>
           </select>
+          <p v-if="!isSuperAdmin" class="text-xs text-muted-foreground mt-1">
+            只有系统管理员(id=1)可创建管理员账户
+          </p>
         </div>
         <div class="flex justify-end gap-2 pt-2">
           <Button variant="outline" @click="showCreate = false">取消</Button>

@@ -53,20 +53,27 @@ export default async function userRoutes(app: FastifyInstance) {
     return success({ defaultProviderId: fresh?.defaultProviderId ?? null });
   });
 
-  // GET /api/users (admin only)
+  // GET /api/users (admin only) — 含 createdBy + 解析后的 createdByUsername
   app.get('/api/users', async (request, reply) => {
     if (request.user!.role !== 'admin') {
       return reply.status(403).send({ success: false, message: 'Admin access required' });
     }
-    const result = db.select({
+    const all = db.select({
       id: users.id,
       username: users.username,
       displayName: users.displayName,
       role: users.role,
       isActive: users.isActive,
+      createdBy: users.createdBy,
       createdAt: users.createdAt,
     }).from(users).all();
-    return success(result);
+    // 解析 createdBy → createdByUsername (null/system 显示 'system')
+    const idToUsername = new Map(all.map(u => [u.id, u.username]));
+    const enriched = all.map(u => ({
+      ...u,
+      createdByUsername: u.createdBy == null ? 'system' : (idToUsername.get(u.createdBy) ?? `#${u.createdBy}(已删除)`),
+    }));
+    return success(enriched);
   });
 
   // PUT /api/users/:id (admin only)
@@ -85,6 +92,10 @@ export default async function userRoutes(app: FastifyInstance) {
       if (body.isActive !== undefined && body.isActive !== 1 && body.isActive !== true) {
         return reply.status(400).send({ success: false, message: '系统管理员账户不能禁用' });
       }
+    }
+    // 角色升级权限:把 user → admin 必须是 super-admin 调用
+    if (body.role === 'admin' && !isProtectedSuperAdmin(request.user!.id)) {
+      return reply.status(403).send({ success: false, message: '只有系统管理员才能授予管理员权限' });
     }
 
     // 防止"最后一个 admin"被自己降级/禁用导致系统无 admin
@@ -108,6 +119,10 @@ export default async function userRoutes(app: FastifyInstance) {
   });
 
   // POST /api/users — admin 新增用户
+  // 权限分级:
+  //   - 必须是 admin 角色才能调
+  //   - 想创建 role='admin' 的用户(管理员)→ 必须是 super-admin (id=1)
+  //   - 普通 admin 只能创建 role='user' 的普通用户
   app.post('/api/users', async (request, reply) => {
     if (request.user!.role !== 'admin') {
       return reply.status(403).send({ success: false, message: 'Admin access required' });
@@ -119,6 +134,11 @@ export default async function userRoutes(app: FastifyInstance) {
     if (body.password.length < 6) {
       return reply.status(400).send({ success: false, message: 'password 至少 6 位' });
     }
+    const wantAdmin = body.role === 'admin';
+    if (wantAdmin && !isProtectedSuperAdmin(request.user!.id)) {
+      return reply.status(403).send({ success: false, message: '只有系统管理员才能创建管理员账户' });
+    }
+
     const existing = db.select({ id: users.id }).from(users).where(eq(users.username, body.username)).get();
     if (existing) return reply.status(409).send({ success: false, message: '用户名已存在' });
 
@@ -127,8 +147,9 @@ export default async function userRoutes(app: FastifyInstance) {
       username: body.username,
       passwordHash,
       displayName: body.displayName || body.username,
-      role: body.role === 'admin' ? 'admin' : 'user',
+      role: wantAdmin ? 'admin' : 'user',
       isActive: 1,
+      createdBy: request.user!.id, // 当前调用者
     }).returning().get();
     return reply.status(201).send(success({
       id: inserted.id,
@@ -136,6 +157,7 @@ export default async function userRoutes(app: FastifyInstance) {
       displayName: inserted.displayName,
       role: inserted.role,
       isActive: inserted.isActive,
+      createdBy: inserted.createdBy,
       createdAt: inserted.createdAt,
     }));
   });

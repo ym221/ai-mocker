@@ -183,6 +183,8 @@ export function initDatabase() {
   if (!userColNames.has('api_key_last_used_at')) sqlite.exec("ALTER TABLE users ADD COLUMN api_key_last_used_at TEXT");
   // 用户级偏好:默认 provider id
   if (!userColNames.has('default_provider_id')) sqlite.exec("ALTER TABLE users ADD COLUMN default_provider_id INTEGER REFERENCES providers(id)");
+  // 创建人(null = 系统 seed)
+  if (!userColNames.has('created_by')) sqlite.exec("ALTER TABLE users ADD COLUMN created_by INTEGER REFERENCES users(id)");
   // Index for O(1) hash lookup
   sqlite.exec("CREATE INDEX IF NOT EXISTS users_api_key_hash_idx ON users (api_key_hash)");
 

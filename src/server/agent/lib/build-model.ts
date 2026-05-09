@@ -11,6 +11,7 @@
  */
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
+import type { LanguageModel } from 'ai';
 import { createCompatFetch } from '../compat-fetch.js';
 
 export interface BuildModelInput {
@@ -20,7 +21,8 @@ export interface BuildModelInput {
   modelName: string;
 }
 
-export function buildModel(input: BuildModelInput) {
+// 显式返回类型(从 'ai' 公开导出),避免 tsc 生成 .d.ts 时引用 .pnpm 内部 LanguageModelV3 路径
+export function buildModel(input: BuildModelInput): LanguageModel {
   const { type, apiKey, baseUrl, modelName } = input;
   const fetchImpl = createCompatFetch(baseUrl || undefined);
 

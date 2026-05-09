@@ -171,8 +171,9 @@ controller 里 \`new BaseModel(table).withMeta(moduleName)\` 自动接管所有 
 1. **5 文件齐全**:\`_meta.json\` \`schema.sql\` \`controller.ts\` \`test.ts\` \`api-doc.md\` — 缺一即失败
 2. **schema.sql 主键 + 时间戳列必填**:每张表必须含
    - \`id INTEGER PRIMARY KEY AUTOINCREMENT\` (**禁止** \`TEXT PRIMARY KEY\` —— 会让 INSERT 拿不到自增 id,findById 返回 null,所有 CRUD 测试连续失败)
-   - \`created_at TEXT DEFAULT CURRENT_TIMESTAMP\`
+   - \`created_at TEXT DEFAULT CURRENT_TIMESTAMP\` (BaseModel 自动管理,框架级系统字段)
    - \`updated_at TEXT DEFAULT CURRENT_TIMESTAMP\` (BaseModel.update 自动写 updated_at,缺列运行时报错)
+2.1 **任何 NOT NULL 的时间戳列必须有 DEFAULT**(无论命名 \`created_at\` 还是 \`createdAt\`):写 \`createdAt TEXT NOT NULL\` 而**不带** \`DEFAULT\` 会触发 INSERT 时 NOT NULL constraint failed —— 必须改成 \`createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP\` 或 \`createdAt TEXT NOT NULL DEFAULT (datetime('now'))\`。优先用框架默认的 snake_case \`created_at\`/\`updated_at\` —— 用 camelCase 一定要在 schema.sql 里加 DEFAULT,否则只能在 controller.create 里显式 \`createdAt: new Date().toISOString()\`。
 3. **_meta.json 实体入口唯一**:所有实体写进 \`entities: [...]\` 数组。**禁用**顶层 \`entity\` 字段(老格式,框架已移除此路径)。\`entities[i].tableName === "mock__" + entities[i].name\`;\`schema.sql\` 的 CREATE TABLE 表名 === entity.tableName(系统自动注入 userId 前缀)
 4. **endpoints.type** 必须是 list/detail/create/update/delete/custom 之一;\`path\` 不加模块名前缀
 5. **controller 导出(单实体)**:命名导出 \`list/getById/create/update/remove\`,不可 default export
@@ -184,5 +185,6 @@ controller 里 \`new BaseModel(table).withMeta(moduleName)\` 自动接管所有 
 7. **test.ts**: import 自 \`@core/test-runner.js\`,不用 describe/expect/chai/jest
 8. **字段名透传**:\`_meta\` field.name、\`schema.sql\` 列名、API 响应字段三者字符串完全一致
 9. **write 失败处理**:返 "SQL execution failed" 立即修 schema.sql 重写;返 "no files provided" 立刻切 write_file 逐文件写,不要原地重试 write_files
+10. **业务唯一字段 generator 熵不足**:若 schema.sql 给业务字段(如 orderNo / serialNo / requestId)加了 \`UNIQUE\`,controller 的 generator 必须包含**毫秒 + 随机后缀**,例:\`\${date}\${time}\${ms.padStart(3,'0')}\${rand3}\`。仅秒精度(\`YYYYMMDDHHmmss\`)在 test.ts 连续 POST 中**100% 撞 UNIQUE constraint failed**,run_test 反复 500。
 ${moduleListSection}${moduleContextSection}`;
 }

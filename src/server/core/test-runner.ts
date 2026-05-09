@@ -104,3 +104,6 @@ export const request = {
     return { status: res.status, body };
   },
 };
+
+// del 别名(部分模型生成 test.ts 时习惯写 request.del,跟 axios/got 类库一致)
+(request as Record<string, unknown>).del = (request as Record<string, (path: string) => unknown>).delete;

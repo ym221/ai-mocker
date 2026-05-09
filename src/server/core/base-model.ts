@@ -229,12 +229,19 @@ export class BaseModel {
     const tableName = this.getTableName();
     const cleanData = { ...data };
 
-    // Remove system fields — let DB handle them
+    // Remove framework-managed system fields(snake_case 约定):let DB DEFAULT 处理
     delete cleanData.id;
     delete cleanData.created_at;
     delete cleanData.updated_at;
-    delete (cleanData as Record<string, unknown>).createdAt;
-    delete (cleanData as Record<string, unknown>).updatedAt;
+    // camelCase 时间字段(createdAt/updatedAt)视为业务字段:仅当 controller 没显式赋值
+    // 才删除走 DB DEFAULT;controller 已 set(controller.ts 里写 createdAt: nowISO())时保留,
+    // 否则 schema.sql 写 NOT NULL 又没 DEFAULT 时会 NOT NULL constraint failed。
+    if ((cleanData as Record<string, unknown>).createdAt == null) {
+      delete (cleanData as Record<string, unknown>).createdAt;
+    }
+    if ((cleanData as Record<string, unknown>).updatedAt == null) {
+      delete (cleanData as Record<string, unknown>).updatedAt;
+    }
 
     // Auto-validate against bound meta (no-op if .withMeta() was never called)
     this.maybeValidate(cleanData, 'create');
@@ -277,10 +284,16 @@ export class BaseModel {
     const numId = typeof id === 'string' ? Number(id) : id;
     const cleanData = { ...data };
 
-    // Remove system fields — don't update these
+    // Remove system fields — don't update these(update 操作不能改 created_at/createdAt)
     delete cleanData.id;
     delete cleanData.created_at;
     delete (cleanData as Record<string, unknown>).createdAt;
+    // updated_at 框架自动维护,删
+    delete cleanData.updated_at;
+    // updatedAt(camelCase 业务字段):若 controller 显式 set 则保留,否则删
+    if ((cleanData as Record<string, unknown>).updatedAt == null) {
+      delete (cleanData as Record<string, unknown>).updatedAt;
+    }
 
     // Auto-validate (partial-merge with existing row so cross-field rules see
     // the post-update state, not just the patch fragment)

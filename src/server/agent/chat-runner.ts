@@ -53,6 +53,32 @@ const PAUSED_KEEP_MS = 24 * 60 * 60 * 1000; // paused runner 保留时间
 // 单 session 硬超时,默认 20 分钟(reasoning model 如 deepseek-v4-pro / o1 思考重,10min 偏紧)。
 // 可通过 CHAT_RUN_TIMEOUT_MS 环境变量覆盖(单位毫秒);Docker 部署在 .env 加 CHAT_RUN_TIMEOUT_MS=1800000 即 30 分钟。
 const RUN_TIMEOUT_MS = Number(process.env.CHAT_RUN_TIMEOUT_MS || 20 * 60 * 1000);
+
+/**
+ * 把 ai-sdk / undici / OpenAI 兼容 API 抛的英文错误翻译成用户能懂的中文 hint。
+ * 主要场景:undici TypeError('terminated')、socket hang up、429、401、网络不可达。
+ * 不是从 i18n 角度,而是给"已结束 无回复 + xxx"的最终用户消息做兜底翻译。
+ */
+function humanizeChatError(raw: string): string {
+  if (!raw) return '生成失败,原因未知';
+  const lower = raw.toLowerCase();
+  if (lower.includes('terminated') || lower.includes('socket hang up') || lower.includes('econnreset')) {
+    return `AI 服务连接中断 (${raw})。常见原因:reasoning model(如 deepseek-v4-pro / o1)长时间 streaming 期间网络抖动 / 代理超时。建议换轻量 model(deepseek-chat / deepseek-v4-flash / gpt-4o)重试。`;
+  }
+  if (lower.includes('fetch failed') || lower.includes('enotfound') || lower.includes('econnrefused') || lower.includes('etimedout')) {
+    return `AI 服务不可达 (${raw})。检查 provider base_url / 网络连通性 / 代理配置。`;
+  }
+  if (lower.includes('429') || lower.includes('rate limit') || lower.includes('too many request')) {
+    return `AI 服务限流 (${raw})。稍后重试或换 provider。`;
+  }
+  if (lower.includes('401') || lower.includes('unauthorized') || lower.includes('invalid api key') || lower.includes('invalid_api_key')) {
+    return `API Key 无效 (${raw})。在 Settings → AI Providers 检查并更新 Key。`;
+  }
+  if (lower.includes('invalid schema') || lower.includes('schema must be')) {
+    return `AI 工具 schema 不被接受 (${raw})。换 model 试试,或反馈给开发者。`;
+  }
+  return raw;
+}
 let heartbeatMsOverride: number | null = null;
 function getHeartbeatMs(): number {
   if (heartbeatMsOverride != null) return heartbeatMsOverride;
@@ -667,7 +693,7 @@ export class ChatRunner {
           this.finalize('paused');
         }
       } else {
-        this.finalize('error', { message: String(err?.message || err) });
+        this.finalize('error', { message: humanizeChatError(String(err?.message || err)) });
       }
     }
   }
@@ -968,17 +994,18 @@ export class ChatRunner {
 
         console.error('[chat-runner stream error]', streamErr?.message || streamErr);
 
-        let errMsg = 'AI service error';
+        let rawMsg = 'AI service error';
         if (streamErr?.lastError?.responseBody) {
           try {
             const parsed = JSON.parse(streamErr.lastError.responseBody);
-            errMsg = parsed.error?.message || errMsg;
+            rawMsg = parsed.error?.message || rawMsg;
           } catch {}
         } else if (streamErr?.lastError?.message) {
-          errMsg = streamErr.lastError.message;
+          rawMsg = streamErr.lastError.message;
         } else if (streamErr instanceof Error) {
-          errMsg = streamErr.message;
+          rawMsg = streamErr.message;
         }
+        const errMsg = humanizeChatError(rawMsg);
 
         // Persist partial content
         const finalText = assistantAccText.join('');
@@ -993,7 +1020,8 @@ export class ChatRunner {
       }
     } catch (err: any) {
       this.flushTextBuffers();
-      const errMsg = err instanceof Error ? err.message : 'Internal error';
+      const rawMsg = err instanceof Error ? err.message : 'Internal error';
+      const errMsg = humanizeChatError(rawMsg);
       if (this.currentMessageId != null) {
         sqlite.prepare(`UPDATE messages SET message_error = ? WHERE id = ?`)
           .run(errMsg, this.currentMessageId);

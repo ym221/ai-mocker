@@ -8,7 +8,8 @@ import { toast } from '../composables/use-toast';
 import { useConfirm } from '@/composables/use-confirm';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { Plus, Pencil, Trash2, Check, X, Copy, RefreshCw, Key } from 'lucide-vue-next';
+import { Plus, Pencil, Trash2, Check, X, Copy, RefreshCw, Key, Zap, CheckCircle2, XCircle } from 'lucide-vue-next';
+import type { TestProviderResult } from '../stores/provider';
 import { usePageHeader } from '@/composables/use-page-header';
 
 usePageHeader({ title: '设置', description: 'AI 服务商与项目预设管理' });
@@ -115,7 +116,13 @@ const providerForm = ref({
   scope: 'private',
 });
 
+// Provider 连接测试状态(必须在 openProviderForm 之前声明,后者会读 draftTestResult)
+const testingDraft = ref(false);
+const draftTestResult = ref<TestProviderResult | null>(null);
+const testingSavedId = ref<number | null>(null);
+
 function openProviderForm(provider?: any) {
+  draftTestResult.value = null; // 清除上次测试结果
   if (provider) {
     editingProviderId.value = provider.id;
     providerForm.value = {
@@ -151,6 +158,58 @@ async function saveProvider() {
     }
     showProviderForm.value = false;
   } catch { /* toast handled by useApi */ }
+}
+
+async function testDraftProvider() {
+  if (!providerForm.value.defaultModel) {
+    toast.error('请先填默认模型');
+    return;
+  }
+  // 编辑模式且 apiKey 为空 → 让用户去列表上测已保存的;否则需要 apiKey
+  if (!providerForm.value.apiKey) {
+    if (editingProviderId.value) {
+      toast.message('未填新 API Key,请关闭后在列表行点 ⚡ 测试已保存的配置');
+    } else {
+      toast.error('请填 API Key');
+    }
+    return;
+  }
+  testingDraft.value = true;
+  draftTestResult.value = null;
+  try {
+    const result = await providerStore.testDraft({
+      type: providerForm.value.type,
+      apiKey: providerForm.value.apiKey,
+      baseUrl: providerForm.value.baseUrl || null,
+      modelName: providerForm.value.defaultModel,
+    });
+    draftTestResult.value = result;
+    if (result.ok) {
+      toast.success(`测试通过 (${result.latencyMs}ms)`);
+    } else {
+      toast.error(`${result.errorCode || 'UNKNOWN'}: ${result.hint || result.errorMessage || ''}`);
+    }
+  } catch (e: any) {
+    toast.error(e?.message || '测试失败');
+  } finally {
+    testingDraft.value = false;
+  }
+}
+
+async function testSavedProvider(id: number) {
+  testingSavedId.value = id;
+  try {
+    const result = await providerStore.testSaved(id);
+    if (result.ok) {
+      toast.success(`测试通过 (${result.latencyMs}ms)`);
+    } else {
+      toast.error(`${result.errorCode || 'UNKNOWN'}: ${result.hint || result.errorMessage || ''}`);
+    }
+  } catch (e: any) {
+    toast.error(e?.message || '测试失败');
+  } finally {
+    testingSavedId.value = null;
+  }
 }
 
 async function deleteProvider(id: number) {
@@ -264,19 +323,63 @@ onMounted(() => {
           v-for="p in providerStore.providers"
           :key="p.id"
           class="border border-border rounded-lg p-4 flex items-center justify-between"
+          :data-testid="`provider-row-${p.id}`"
         >
-          <div>
-            <div class="font-medium">{{ p.name }}</div>
+          <div class="min-w-0 flex-1">
+            <div class="font-medium flex items-center gap-2 flex-wrap">
+              <span>{{ p.name }}</span>
+              <!-- 验证状态 badge -->
+              <span
+                v-if="p.isVerified === 1"
+                class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-green-50 text-green-700 border border-green-200"
+                :title="p.lastVerifiedAt ? `上次验证 ${p.lastVerifiedAt}` : ''"
+                :data-testid="`provider-badge-${p.id}`"
+              >
+                <CheckCircle2 class="w-3 h-3" /> 已验证
+              </span>
+              <span
+                v-else-if="p.lastVerifiedAt"
+                class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-red-50 text-red-700 border border-red-200"
+                :title="p.lastVerifiedError || ''"
+                :data-testid="`provider-badge-${p.id}`"
+              >
+                <XCircle class="w-3 h-3" /> 验证失败
+              </span>
+              <span
+                v-else
+                class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200"
+                :data-testid="`provider-badge-${p.id}`"
+              >
+                未验证
+              </span>
+            </div>
             <div class="text-sm text-muted-foreground">
               {{ p.type }} | {{ p.defaultModel }} | {{ p.scope }}
               <span v-if="p.baseUrl" class="ml-1">| {{ p.baseUrl }}</span>
             </div>
+            <div
+              v-if="p.lastVerifiedError && p.isVerified !== 1"
+              class="text-xs text-red-500 mt-1 truncate max-w-md"
+              :title="p.lastVerifiedError"
+            >
+              {{ p.lastVerifiedError }}
+            </div>
           </div>
-          <div class="flex gap-2">
-            <button @click="openProviderForm(p)" class="p-1.5 rounded hover:bg-accent">
+          <div class="flex gap-2 shrink-0">
+            <!-- 注:编辑按钮放第一位,旧测试用 .first() 选编辑按钮,顺序变更会破坏回归 -->
+            <button @click="openProviderForm(p)" class="p-1.5 rounded hover:bg-accent" :title="'编辑'">
               <Pencil class="w-4 h-4" />
             </button>
-            <button @click="deleteProvider(p.id)" class="p-1.5 rounded hover:bg-destructive/10 text-destructive">
+            <button
+              @click="testSavedProvider(p.id)"
+              :disabled="testingSavedId === p.id"
+              class="p-1.5 rounded hover:bg-accent disabled:opacity-50"
+              :title="'测试连接'"
+              :data-testid="`provider-test-${p.id}`"
+            >
+              <Zap class="w-4 h-4" :class="testingSavedId === p.id ? 'animate-pulse' : ''" />
+            </button>
+            <button @click="deleteProvider(p.id)" class="p-1.5 rounded hover:bg-destructive/10 text-destructive" :title="'删除'">
               <Trash2 class="w-4 h-4" />
             </button>
           </div>
@@ -323,9 +426,43 @@ onMounted(() => {
               <option value="public">公开</option>
             </select>
           </div>
-          <div class="flex justify-end gap-2 pt-2">
-            <Button variant="outline" @click="showProviderForm = false">取消</Button>
-            <Button @click="saveProvider">保存</Button>
+          <!-- 测试结果显示 -->
+          <div
+            v-if="draftTestResult"
+            class="rounded-md p-3 text-sm border"
+            :class="draftTestResult.ok
+              ? 'bg-green-50 text-green-800 border-green-200'
+              : 'bg-red-50 text-red-800 border-red-200'"
+            data-testid="draft-test-result"
+          >
+            <div class="font-medium flex items-center gap-1.5">
+              <CheckCircle2 v-if="draftTestResult.ok" class="w-4 h-4" />
+              <XCircle v-else class="w-4 h-4" />
+              {{ draftTestResult.ok ? '测试通过' : (draftTestResult.errorCode || '失败') }}
+              <span class="text-xs font-normal opacity-70">({{ draftTestResult.latencyMs }}ms)</span>
+            </div>
+            <div v-if="!draftTestResult.ok && draftTestResult.hint" class="mt-1 text-xs">
+              {{ draftTestResult.hint }}
+            </div>
+            <div v-if="!draftTestResult.ok && draftTestResult.errorMessage" class="mt-1 text-xs opacity-70 break-all">
+              {{ draftTestResult.errorMessage }}
+            </div>
+          </div>
+
+          <div class="flex justify-between gap-2 pt-2">
+            <Button
+              variant="outline"
+              @click="testDraftProvider"
+              :disabled="testingDraft"
+              data-testid="draft-test-btn"
+            >
+              <Zap class="w-4 h-4 mr-1" :class="testingDraft ? 'animate-pulse' : ''" />
+              {{ testingDraft ? '测试中...' : '测试连接' }}
+            </Button>
+            <div class="flex gap-2">
+              <Button variant="outline" @click="showProviderForm = false">取消</Button>
+              <Button @click="saveProvider">保存</Button>
+            </div>
           </div>
         </div>
       </div>

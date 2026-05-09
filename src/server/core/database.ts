@@ -154,6 +154,12 @@ export function initDatabase() {
   if (!modColNames.has('last_run_status')) sqlite.exec("ALTER TABLE modules ADD COLUMN last_run_status TEXT");
   if (!modColNames.has('last_run_error')) sqlite.exec("ALTER TABLE modules ADD COLUMN last_run_error TEXT");
 
+  // Providers 表:测试连接结果字段(provider 测试功能用)
+  const provCols = sqlite.prepare("PRAGMA table_info('providers')").all() as { name: string }[];
+  const provColNames = new Set(provCols.map(c => c.name));
+  if (!provColNames.has('last_verified_at')) sqlite.exec("ALTER TABLE providers ADD COLUMN last_verified_at TEXT");
+  if (!provColNames.has('last_verified_error')) sqlite.exec("ALTER TABLE providers ADD COLUMN last_verified_error TEXT");
+
   // MCP: users 表新增 API Key 相关字段
   const userCols = sqlite.prepare("PRAGMA table_info('users')").all() as { name: string }[];
   const userColNames = new Set(userCols.map(c => c.name));

@@ -27,6 +27,9 @@ export const providers = sqliteTable('providers', {
   scope: text('scope').notNull().default('private'), // public | private
   ownerId: integer('owner_id').references(() => users.id),
   isVerified: integer('is_verified').default(0),
+  // 测试连接结果(provider 测试功能用):成功时记 ISO 时间,失败时也记时间;失败原因写入 lastVerifiedError
+  lastVerifiedAt: text('last_verified_at'),
+  lastVerifiedError: text('last_verified_error'),
   isActive: integer('is_active').default(1),
   createdAt: text('created_at').default(sql`(datetime('now'))`),
   updatedAt: text('updated_at').default(sql`(datetime('now'))`),

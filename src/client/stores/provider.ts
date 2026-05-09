@@ -12,9 +12,21 @@ interface Provider {
   scope: string;
   ownerId: number | null;
   isVerified: number;
+  lastVerifiedAt: string | null;
+  lastVerifiedError: string | null;
   isActive: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TestProviderResult {
+  ok: boolean;
+  errorCode?: string;
+  errorMessage?: string;
+  hint?: string;
+  latencyMs: number;
+  gotText: boolean;
+  gotToolCall: boolean;
 }
 
 export const useProviderStore = defineStore('provider', () => {
@@ -50,5 +62,28 @@ export const useProviderStore = defineStore('provider', () => {
     await fetchProviders();
   }
 
-  return { providers, loading, fetchProviders, createProvider, updateProvider, deleteProvider };
+  /** 测试草稿配置(还没保存的表单内容) */
+  async function testDraft(input: {
+    type: string; apiKey?: string; baseUrl?: string | null; modelName: string;
+  }): Promise<TestProviderResult> {
+    const api = useApi();
+    const res = await api.post<{ success: boolean; data: TestProviderResult }>(
+      '/api/providers/test',
+      input,
+    );
+    return res.data;
+  }
+
+  /** 测试已保存的 provider(后端会更新 is_verified / last_verified_*) */
+  async function testSaved(id: number): Promise<TestProviderResult> {
+    const api = useApi();
+    const res = await api.post<{ success: boolean; data: TestProviderResult }>(
+      `/api/providers/${id}/test`,
+      {},
+    );
+    await fetchProviders(); // 拉新状态
+    return res.data;
+  }
+
+  return { providers, loading, fetchProviders, createProvider, updateProvider, deleteProvider, testDraft, testSaved };
 });

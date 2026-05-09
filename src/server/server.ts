@@ -1,9 +1,19 @@
 // Setup HTTP proxy for AI API calls (needed in China for Google/OpenAI)
 import { ProxyAgent, setGlobalDispatcher } from 'undici';
+import { existsSync } from 'fs';
 const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy;
 if (proxyUrl) {
-  setGlobalDispatcher(new ProxyAgent(proxyUrl));
-  console.log(`Using proxy: ${proxyUrl}`);
+  // 防御:容器内的 localhost 代理几乎必错(127.0.0.1 是容器自己,代理软件不在容器里)。
+  // 用户从本地 .env 复制 HTTPS_PROXY=http://127.0.0.1:xxx 到服务器是常见误操作。
+  // 检测到这种组合时警告并忽略,避免所有 outbound 请求 ECONNREFUSED。
+  const isLocalhostProxy = /^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0)(:|\/|$)/i.test(proxyUrl);
+  const inContainer = existsSync('/.dockerenv') || process.env.container === 'docker';
+  if (isLocalhostProxy && inContainer) {
+    console.warn(`[proxy] 忽略 HTTPS_PROXY=${proxyUrl} —— 容器内 localhost 代理几乎必然不可达(127.0.0.1 在容器里指容器自己,你的 V2Ray/Clash 不在容器里)。如确需代理,改成可达的网关 IP。当前已切换为直连。`);
+  } else {
+    setGlobalDispatcher(new ProxyAgent(proxyUrl));
+    console.log(`Using proxy: ${proxyUrl}`);
+  }
 }
 
 import app from './app.js';

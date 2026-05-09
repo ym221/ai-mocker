@@ -66,45 +66,50 @@ test.describe('管理页 - 用户管理交互', () => {
     }
   });
 
-  test('A07 降级管理员', async ({ page }) => {
+  test('A07 降级管理员(只测可降级的;系统超级管理员被保护)', async ({ page }) => {
     await page.goto('/admin');
     await page.waitForTimeout(500);
-    // 找非当前用户的 Demote 按钮（第二行起）
     const rows = page.locator('tbody tr');
     const count = await rows.count();
     for (let i = 0; i < count; i++) {
       const row = rows.nth(i);
-      const username = await row.locator('td').nth(1).textContent();
-      if (username?.trim() !== 'admin') {
-        const demoteBtn = row.getByRole('button', { name: '降级' });
-        if (await demoteBtn.isVisible()) {
-          await demoteBtn.click();
-          await expectToast(page, '角色已变更为普通用户');
-          return;
-        }
+      const demoteBtn = row.getByRole('button', { name: '降级' });
+      if (await demoteBtn.isVisible() && await demoteBtn.isEnabled()) {
+        await demoteBtn.click();
+        await expectToast(page, '角色已变更为');
+        return;
       }
     }
     test.skip();
   });
 
-  test('A08 禁用用户', async ({ page }) => {
+  test('A08 禁用用户(只测可禁用的;系统超级管理员被保护)', async ({ page }) => {
     await page.goto('/admin');
     await page.waitForTimeout(500);
     const rows = page.locator('tbody tr');
     const count = await rows.count();
     for (let i = 0; i < count; i++) {
       const row = rows.nth(i);
-      const username = await row.locator('td').nth(1).textContent();
-      if (username?.trim() !== 'admin') {
-        const disableBtn = row.getByRole('button', { name: '禁用' });
-        if (await disableBtn.isVisible()) {
-          await disableBtn.click();
-          await expectToast(page, '用户已禁用');
-          return;
-        }
+      const disableBtn = row.getByRole('button', { name: '禁用' });
+      if (await disableBtn.isVisible() && await disableBtn.isEnabled()) {
+        await disableBtn.click();
+        await expectToast(page, '用户已禁用');
+        return;
       }
     }
     test.skip();
+  });
+
+  test('A11 系统管理员(id=1)的降级/禁用/删除按钮全部 disabled', async ({ page }) => {
+    await page.goto('/admin');
+    await page.waitForSelector('[data-testid="user-row-1"]', { timeout: 5000 });
+    const row = page.locator('[data-testid="user-row-1"]');
+    const demoteBtn = row.getByRole('button', { name: '降级' });
+    const disableBtn = row.getByRole('button', { name: '禁用' });
+    const deleteBtn = row.locator('[data-testid="user-delete-1"]');
+    await expect(demoteBtn).toBeDisabled();
+    await expect(disableBtn).toBeDisabled();
+    await expect(deleteBtn).toBeDisabled();
   });
 
   test('A09 启用用户', async ({ page }) => {

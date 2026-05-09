@@ -290,8 +290,27 @@ export default async function providerRoutes(app: FastifyInstance) {
       db.update(providers).set({ defaultModel: fallback.modelName }).where(eq(providers.id, id)).run();
     }
     db.delete(providerModels).where(eq(providerModels.id, modelId)).run();
+    syncProviderVerifiedFromDefaultModel(id);
     return success(null, '已删除');
   });
+
+  /**
+   * 联动:provider.is_verified 反映"它的 default model 是否测试通过"。
+   * - default model 的 isVerified=1 → providers.is_verified=1
+   * - default model 的 isVerified=0(测失败 或 未测) → providers.is_verified=0
+   * 在 model test / set-default / delete 后调用。
+   */
+  function syncProviderVerifiedFromDefaultModel(providerId: number) {
+    const p = db.select().from(providers).where(eq(providers.id, providerId)).get();
+    if (!p) return;
+    const defaultModel = db.select().from(providerModels)
+      .where(and(eq(providerModels.providerId, providerId), eq(providerModels.modelName, p.defaultModel)))
+      .get();
+    const verified = defaultModel?.isVerified === 1 ? 1 : 0;
+    if (p.isVerified !== verified) {
+      db.update(providers).set({ isVerified: verified }).where(eq(providers.id, providerId)).run();
+    }
+  }
 
   // POST /api/providers/:id/models/:modelId/test — 测试该 model 连通性
   // 任何能看到 provider 的用户都能测,结果写回 db(共享给 public provider 全部可见用户)
@@ -325,6 +344,8 @@ export default async function providerRoutes(app: FastifyInstance) {
       lastVerifiedError: result.ok ? null : `[${result.errorCode || 'UNKNOWN'}] ${result.errorMessage || ''}`.slice(0, 500),
       updatedAt: now,
     }).where(eq(providerModels.id, modelId)).run();
+    // 联动:若该 model 是 provider 的 default,同步 provider.is_verified
+    syncProviderVerifiedFromDefaultModel(id);
     return reply.status(200).send(success(result));
   });
 
@@ -339,6 +360,7 @@ export default async function providerRoutes(app: FastifyInstance) {
       .get();
     if (!m) return reply.status(404).send({ success: false, message: 'Model not found' });
     db.update(providers).set({ defaultModel: m.modelName }).where(eq(providers.id, id)).run();
+    syncProviderVerifiedFromDefaultModel(id);
     return success({ defaultModel: m.modelName });
   });
 

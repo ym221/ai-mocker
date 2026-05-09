@@ -122,22 +122,26 @@ const finalElapsedText = computed(() => {
   return s == null ? '' : formatElapsed(s);
 });
 
-// 何时显示"耗时 X"完成横条:
-//   - 已 streamDone(终态)
-//   - 不是 user 消息
-//   - 该消息确实有过生成阶段(有 startedAt)
-//   - aborted/error 状态下已有自己的 banner,不再重复显示完成
+// 普通对话(有正文回复但没 modules 产出)= 用户随便聊聊,本身就秒回,
+// 没必要再加"完成 · 耗时 X 秒"banner 噪音。只在以下两类才显示:
+//   1. 模块生成成功(modules 非空) → 绿色"完成 · 耗时 X"
+//   2. 空回复(无 text 无 modules) → 灰色"已结束 · 无回复 · 耗时 X"
+const isPlainChatReply = computed(() => {
+  const hasText = !!(props.content && props.content.trim());
+  const hasModules = (props.modules?.length ?? 0) > 0;
+  return hasText && !hasModules;
+});
+
 const showCompletionBanner = computed(() =>
   props.streamDone
   && !isUser.value
   && !!props.startedAt
   && !props.aborted
   && !props.messageError
+  && !isPlainChatReply.value
 );
 
-// 空回复检测: 流终止 + 无 text + 无 module 卡片(thinking 不算因为用户看不到)。
-// 此时显示绿勾"完成"会误导用户(以为生成成功),改用中性灰色"已结束 · 无回复"
-// 提示这次 turn 没产出有效输出。
+// 空回复检测: 流终止 + 无 text + 无 module 卡片
 const isEmptyCompletion = computed(() => {
   if (!showCompletionBanner.value) return false;
   const hasText = !!(props.content && props.content.trim());

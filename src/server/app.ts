@@ -3,8 +3,8 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
-import { existsSync, mkdirSync } from 'fs';
-import { resolve } from 'path';
+import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { resolve, join } from 'path';
 import { success } from './core/response.js';
 
 const app = Fastify({
@@ -52,6 +52,30 @@ if (process.env.NODE_ENV === 'production') {
       root: clientDir,
       prefix: '/',
       decorateReply: false,
+    });
+
+    // SPA fallback:Vue Router history mode 下,/chat/:id /modules/:name 等前端路由
+    // 在浏览器刷新时直接打到后端,fastify 找不到对应静态文件 → 404。
+    // 这里把所有非后端 API 的 GET 请求都 fallback 到 index.html,让 Vue Router 接管。
+    const indexHtmlPath = join(clientDir, 'index.html');
+    let cachedIndexHtml: string | null = null;
+    const getIndexHtml = (): string => {
+      if (cachedIndexHtml === null && existsSync(indexHtmlPath)) {
+        cachedIndexHtml = readFileSync(indexHtmlPath, 'utf-8');
+      }
+      return cachedIndexHtml || '';
+    };
+    app.setNotFoundHandler((request, reply) => {
+      const url = request.url;
+      const isApi = url.startsWith('/api/')
+        || url.startsWith('/mock/')
+        || url.startsWith('/mcp')
+        || url.startsWith('/uploads/');
+      if (request.method === 'GET' && !isApi) {
+        const html = getIndexHtml();
+        if (html) return reply.type('text/html').send(html);
+      }
+      return reply.status(404).send({ success: false, message: 'Resource not found' });
     });
   }
 }

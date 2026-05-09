@@ -12,7 +12,20 @@ const router = useRouter();
 const chatStore = useChatStore();
 
 const displayMessages = computed(() => chatStore.activeStream?.messages ?? []);
-const isLoading = computed(() => chatStore.activeStream?.status === 'running' || chatStore.activeStream?.status === 'connecting');
+const isLoading = computed(() => {
+  const s = chatStore.activeStream;
+  if (!s) return false;
+  // 流活跃中
+  if (s.status === 'running' || s.status === 'connecting') return true;
+  // 兜底:client SSE 断了(代理 idle 超时 / 网络抖动)→ store finally 把 status 改 'done',
+  // 但后端 chat-runner 仍在跑,最后一条 assistant msg 还没拿到 streamDone。
+  // 这种情况 ChatInput 仍应显示"暂停"而不是"发送",防止用户在后端还在跑时插入新消息。
+  const last = s.messages[s.messages.length - 1];
+  if (last?.role === 'assistant' && !last.streamDone && !last.aborted && !last.messageError) {
+    return true;
+  }
+  return false;
+});
 
 // ==================== New-session dialog ====================
 

@@ -50,7 +50,9 @@ export type RunStatus = 'idle' | 'running' | 'paused' | 'done' | 'error';
 const registry = new Map<string, ChatRunner>();
 const IDLE_CLEANUP_MS = 30 * 60 * 1000;   // 活跃态清理窗口
 const PAUSED_KEEP_MS = 24 * 60 * 60 * 1000; // paused runner 保留时间
-const RUN_TIMEOUT_MS = Number(process.env.CHAT_RUN_TIMEOUT_MS || 10 * 60 * 1000); // 10min hard timeout (configurable)
+// 单 session 硬超时,默认 20 分钟(reasoning model 如 deepseek-v4-pro / o1 思考重,10min 偏紧)。
+// 可通过 CHAT_RUN_TIMEOUT_MS 环境变量覆盖(单位毫秒);Docker 部署在 .env 加 CHAT_RUN_TIMEOUT_MS=1800000 即 30 分钟。
+const RUN_TIMEOUT_MS = Number(process.env.CHAT_RUN_TIMEOUT_MS || 20 * 60 * 1000);
 let heartbeatMsOverride: number | null = null;
 function getHeartbeatMs(): number {
   if (heartbeatMsOverride != null) return heartbeatMsOverride;
@@ -380,9 +382,21 @@ export class ChatRunner {
     else if (terminal === 'error') { lastRunStatus = this._timedOut ? 'timeout' : 'error'; lastRunError = terminalMessage || (this._timedOut ? '生成超时' : '生成失败'); }
     else { lastRunStatus = 'interrupted'; lastRunError = null; }
 
-    // Missing = no files at all → abandoned create-stub, remove
+    // Missing = no files at all
     if (report.health === 'missing') {
       if (operation === 'create') {
+        // Timeout 场景下 = 用户等了 10 分钟一个文件没出来,删掉模块行用户会困惑("我明明等了那么久,模块没了")。
+        // 保留 row + status='error',让用户看到清晰的失败原因 + 重试入口;model 反应过慢的,提示换轻量 model。
+        if (this._timedOut) {
+          const minutes = Math.round(RUN_TIMEOUT_MS / 60000);
+          const hint = `生成超时(${minutes} 分钟内未产出任何文件)。可能原因:reasoning model 思考过久(如 deepseek-v4-pro / o1)。建议换 deepseek-chat / deepseek-v4-flash / gpt-4o,或在 .env 调大 CHAT_RUN_TIMEOUT_MS(单位毫秒,如 1800000=30 分钟)。`;
+          sqlite.prepare(
+            `UPDATE modules SET status = 'error', error_message = ?, last_run_status = 'timeout', last_run_error = ?, updated_at = ?
+             WHERE name = ? AND user_id = ?`
+          ).run(hint, terminalMessage || '生成超时', now(), moduleName, userId);
+          return;
+        }
+        // 非 timeout(用户主动 abort / model 决定不写)→ 干净删掉,避免遗留空 row
         sqlite.prepare(`DELETE FROM modules WHERE name = ? AND user_id = ?`).run(moduleName, userId);
         return;
       }

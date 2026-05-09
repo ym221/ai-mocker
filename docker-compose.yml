@@ -28,6 +28,8 @@ services:
       - DEFAULT_AI_API_KEY=${DEFAULT_AI_API_KEY:-}
       # MCP API Key HMAC 密钥(MCP 鉴权用)
       - MCP_API_KEY_SECRET=${MCP_API_KEY_SECRET:-}
+      # 单次 chat 生成的硬超时(毫秒);默认 20 分钟。reasoning model 如 v4-pro/o1 建议 1800000(30 分钟)
+      - CHAT_RUN_TIMEOUT_MS=${CHAT_RUN_TIMEOUT_MS:-}
       # 出境代理(可选;不设则不走代理)
       - HTTPS_PROXY=${HTTPS_PROXY:-}
       - HTTP_PROXY=${HTTP_PROXY:-}

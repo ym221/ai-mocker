@@ -49,11 +49,16 @@ const PRESET_NONE = '__none__';
 const providerSelect = computed<string>({
   get: () => providerId.value == null ? PROVIDER_DEFAULT : String(providerId.value),
   set: (v) => {
-    providerId.value = v === PROVIDER_DEFAULT ? null : Number(v);
-    // Auto-fill model from the chosen provider's default if model box is empty
-    if (providerId.value != null && !model.value) {
-      const p = providerStore.providers.find(x => x.id === providerId.value);
-      if (p) model.value = p.defaultModel;
+    const newId = v === PROVIDER_DEFAULT ? null : Number(v);
+    if (newId === providerId.value) return; // 没变,无需动 model
+    providerId.value = newId;
+    // 切换 provider 时无条件重置 model:新 provider 的 default,或空(切到"系统默认"时)。
+    // 不同 provider 的 model 名完全不同(gemma-4-31b-it vs claude-sonnet-4-5),保留旧名一定错配。
+    if (newId != null) {
+      const p = providerStore.providers.find(x => x.id === newId);
+      model.value = p?.defaultModel ?? '';
+    } else {
+      model.value = '';
     }
   },
 });

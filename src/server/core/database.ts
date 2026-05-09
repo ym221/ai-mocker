@@ -130,6 +130,21 @@ export function initDatabase() {
       ON message_events (session_id, seq);
     CREATE INDEX IF NOT EXISTS msg_events_message_id_idx
       ON message_events (message_id);
+
+    -- per-provider 用户维护的预置模型清单
+    CREATE TABLE IF NOT EXISTS provider_models (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+      model_name TEXT NOT NULL,
+      note TEXT,
+      is_verified INTEGER DEFAULT 0,
+      last_verified_at TEXT,
+      last_verified_error TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS provider_models_provider_model_idx
+      ON provider_models (provider_id, model_name);
   `);
 
   // Migrations for existing databases
@@ -166,6 +181,8 @@ export function initDatabase() {
   if (!userColNames.has('api_key_hash')) sqlite.exec("ALTER TABLE users ADD COLUMN api_key_hash TEXT");
   if (!userColNames.has('api_key_created_at')) sqlite.exec("ALTER TABLE users ADD COLUMN api_key_created_at TEXT");
   if (!userColNames.has('api_key_last_used_at')) sqlite.exec("ALTER TABLE users ADD COLUMN api_key_last_used_at TEXT");
+  // 用户级偏好:默认 provider id
+  if (!userColNames.has('default_provider_id')) sqlite.exec("ALTER TABLE users ADD COLUMN default_provider_id INTEGER REFERENCES providers(id)");
   // Index for O(1) hash lookup
   sqlite.exec("CREATE INDEX IF NOT EXISTS users_api_key_hash_idx ON users (api_key_hash)");
 

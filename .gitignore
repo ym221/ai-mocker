@@ -17,6 +17,7 @@ tests/.auth/
 test-results/
 playwright-report/
 coverage/
+.test-tmp/
 
 # IDE / tool local
 .claude/settings.local.json

@@ -179,7 +179,7 @@ test.describe('TP — Provider 测试连接(UI)', () => {
     await page.click('button:has-text("添加服务商")');
     await page.waitForSelector('[data-testid="draft-test-btn"]');
     // 填 model 但不填 apiKey
-    await page.fill('input[placeholder="gpt-4o-mini"]', 'gpt-4o-mini');
+    await page.fill('[data-testid="provider-form-default-model"]', 'gpt-4o-mini');
     await page.click('[data-testid="draft-test-btn"]');
     await page.waitForSelector('text=请填 API Key', { timeout: 5000 });
   });
@@ -188,7 +188,7 @@ test.describe('TP — Provider 测试连接(UI)', () => {
     test.setTimeout(60_000);
     await page.click('button:has-text("添加服务商")');
     await page.waitForSelector('[data-testid="draft-test-btn"]');
-    await page.fill('input[placeholder="gpt-4o-mini"]', 'gpt-4o-mini');
+    await page.fill('[data-testid="provider-form-default-model"]', 'gpt-4o-mini');
     await page.fill('input[type="password"]', 'sk-fake-key-for-test');
     await page.fill('input[placeholder="https://api.openai.com/v1"]', 'http://127.0.0.1:1/v1');
     await page.click('[data-testid="draft-test-btn"]');

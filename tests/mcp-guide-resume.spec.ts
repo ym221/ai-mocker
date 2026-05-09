@@ -63,12 +63,12 @@ test.describe('Task 5.5 — guide + tool descriptions', () => {
     } finally { await c.close(); }
   });
 
-  test('GR03 会话工具 description 互相提及 + 12 tools total (inspect_module 合并 3 个读工具)', async () => {
+  test('GR03 会话工具 description 互相提及 + 13 tools total (新增 list_models)', async () => {
     const key = await generateApiKey();
     const c = await connect(key);
     try {
       const { tools } = await c.listTools();
-      expect(tools.length).toBe(12);
+      expect(tools.length).toBe(13);
 
       const getStatus = tools.find((t: any) => t.name === 'get_session_status') as any;
       const cancel = tools.find((t: any) => t.name === 'cancel_session') as any;

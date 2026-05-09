@@ -31,7 +31,7 @@ test.describe('端到端业务流程', () => {
     // 创建
     await page.click('text=添加服务商');
     await page.fill('input[placeholder="我的 OpenAI 服务商"]', name);
-    await page.fill('input[placeholder="gpt-4o-mini"]', 'gpt-test');
+    await page.fill('[data-testid="provider-form-default-model"]', 'gpt-test');
     await page.click('button:has-text("保存")');
     await expectToast(page, '服务商已保存');
     await page.waitForTimeout(500);

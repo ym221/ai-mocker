@@ -26,10 +26,11 @@ const GUIDE_MARKDOWN = `# MockForge MCP
   - 或 polling \`get_session_status(sessionId)\`（5ms 非阻塞快照）
   - 客户端 transport 断了不要紧，server-side 任务继续跑，重发即续接
 
-## 12 个工具
+## 13 个工具
 
 **读**
 - \`list_modules\` — 列出所有模块（name / status / health / endpoints / mockBaseUrl）
+- \`list_models\` — 按 provider 分组列出可用 AI 模型;每个 model 带 \`isVerified\`(测试通过)+ \`note\`(用户写的成本/速度备注)+ \`isDefault\`。**写工具调用前先看这个挑合适的 model**
 - \`inspect_module(moduleName, view?)\` — view: \`all|doc|openapi|health\`（默认 all）
 - \`get_mock_access_log(moduleName)\` — 业务代码最近打到 Mock 的真实请求/响应
 - \`diff_with_openapi(moduleName, actualRequest, actualResponse)\` — 实际 vs 契约结构化 diff
@@ -51,7 +52,7 @@ const GUIDE_MARKDOWN = `# MockForge MCP
 
 ## 没有接口文档时：A 一把梭 / B 你先出 spec
 
-> 心智锚点：MCP 后端默认走**成本优先模型**（免费 gemma 系，中等偏弱）。决策按你（user 端 Agent）的模型档位选。
+> 心智锚点：MCP 后端默认走**用户在 Web UI 设的默认 provider + 默认 model**。实际 model 不固定(可能 GPT / Claude / DeepSeek 等任意)。\n> 先调 \`list_models\` 看用户配的清单(每个 model 带 \`isVerified\` 测试通过状态 + \`note\` 备注),根据 note 选合适的 model;在 \`create_module_from_spec\` / \`update_module\` 调用时传 \`provider\` / \`model\` 覆盖默认。
 
 **模式 A — 丢需求文本给 MCP**：\`create_module_from_spec({ spec: "<自然语言需求>", moduleName })\`
 适合：CRUD 套路 / 简单规则 / 你的模型档位 ≤ MCP 默认。

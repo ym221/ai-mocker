@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useChatStore } from '../stores/chat';
 import ChatPanel from '../components/chat/ChatPanel.vue';
-import SessionConfigDialog, { type SessionConfigValue } from '../components/chat/SessionConfigDialog.vue';
 import { Button } from '../components/ui/button';
 import { Plus, Trash2, MessageSquare } from 'lucide-vue-next';
+import { toast } from '../composables/use-toast';
 
 const route = useRoute();
 const router = useRouter();
@@ -27,46 +27,17 @@ const isLoading = computed(() => {
   return false;
 });
 
-// ==================== New-session dialog ====================
+// ==================== New-session(直接创建,不弹 dialog) ====================
+// 后端 resolveProviderId 会自动用用户的 default_provider_id;model 自动用该 provider 的 default_model;
+// preset 默认不选。用户想换 provider/model 在对话内 SessionMetaBar 切换。
 
-const LS_KEY = 'mockforge.session-config.lastUsed';
-
-function readLastUsed(): Partial<SessionConfigValue> | null {
+async function newSession() {
   try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return null;
-    return {
-      providerId: typeof parsed.providerId === 'number' ? parsed.providerId : null,
-      model: typeof parsed.model === 'string' ? parsed.model : null,
-      presetId: typeof parsed.presetId === 'number' ? parsed.presetId : null,
-    };
-  } catch {
-    return null;
+    const session = await chatStore.createSession();
+    await selectSession(session.id);
+  } catch (e: any) {
+    toast.error(e?.message || '创建会话失败');
   }
-}
-
-function writeLastUsed(cfg: SessionConfigValue): void {
-  try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); } catch { /* quota / privacy mode */ }
-}
-
-const configDialogOpen = ref(false);
-const configDialogInitial = ref<Partial<SessionConfigValue> | null>(null);
-
-function openNewSessionDialog() {
-  configDialogInitial.value = readLastUsed();
-  configDialogOpen.value = true;
-}
-
-async function handleConfigConfirm(cfg: SessionConfigValue) {
-  writeLastUsed(cfg);
-  const session = await chatStore.createSession({
-    providerId: cfg.providerId,
-    presetId: cfg.presetId,
-    model: cfg.model,
-  });
-  await selectSession(session.id);
 }
 
 // ==================== Session nav ====================
@@ -87,12 +58,8 @@ async function selectSession(sessionId: string) {
 async function handleSend(message: string) {
   let sid = chatStore.activeSessionId;
   if (!sid) {
-    const last = readLastUsed();
-    const session = await chatStore.createSession({
-      providerId: last?.providerId ?? null,
-      presetId: last?.presetId ?? null,
-      model: last?.model ?? null,
-    });
+    // 后端 resolveProviderId 自动用默认 provider + 默认 model
+    const session = await chatStore.createSession();
     sid = session.id;
     await selectSession(sid);
   }
@@ -152,7 +119,7 @@ watch(() => route.params.sessionId, async (newId) => {
     <!-- Session sidebar -->
     <div class="w-56 border-r border-border bg-muted/30 hidden md:flex flex-col">
       <div class="p-3">
-        <Button size="sm" class="w-full" @click="openNewSessionDialog" data-testid="new-session-btn">
+        <Button size="sm" class="w-full" @click="newSession" data-testid="new-session-btn">
           <Plus class="w-4 h-4 mr-1" /> 新建对话
         </Button>
       </div>
@@ -195,10 +162,5 @@ watch(() => route.params.sessionId, async (newId) => {
       />
     </div>
 
-    <SessionConfigDialog
-      v-model:open="configDialogOpen"
-      :initial="configDialogInitial"
-      @confirm="handleConfigConfirm"
-    />
   </div>
 </template>

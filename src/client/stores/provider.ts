@@ -29,6 +29,23 @@ export interface TestProviderResult {
   gotToolCall: boolean;
 }
 
+export interface ProviderModel {
+  id: number;
+  providerId: number;
+  modelName: string;
+  note: string | null;
+  isVerified: number;
+  lastVerifiedAt: string | null;
+  lastVerifiedError: string | null;
+  isDefault: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface UserPreferences {
+  defaultProviderId: number | null;
+}
+
 export const useProviderStore = defineStore('provider', () => {
   const providers = ref<Provider[]>([]);
   const loading = ref(false);
@@ -85,5 +102,77 @@ export const useProviderStore = defineStore('provider', () => {
     return res.data;
   }
 
-  return { providers, loading, fetchProviders, createProvider, updateProvider, deleteProvider, testDraft, testSaved };
+  // ==================== 预置模型 (per-provider) ====================
+  /** 当前展开的 provider 的 models 缓存(key=providerId) */
+  const modelsByProvider = ref<Record<number, ProviderModel[]>>({});
+
+  async function fetchProviderModels(providerId: number): Promise<ProviderModel[]> {
+    const api = useApi();
+    const res = await api.get<{ success: boolean; data: ProviderModel[] }>(`/api/providers/${providerId}/models`);
+    modelsByProvider.value[providerId] = res.data;
+    return res.data;
+  }
+
+  async function addModel(providerId: number, modelName: string, note?: string): Promise<ProviderModel> {
+    const api = useApi();
+    const res = await api.post<{ success: boolean; data: ProviderModel }>(
+      `/api/providers/${providerId}/models`,
+      { modelName, note },
+    );
+    await fetchProviderModels(providerId);
+    return res.data;
+  }
+
+  async function updateModel(providerId: number, modelId: number, patch: { modelName?: string; note?: string | null }): Promise<void> {
+    const api = useApi();
+    await api.put(`/api/providers/${providerId}/models/${modelId}`, patch);
+    await fetchProviderModels(providerId);
+  }
+
+  async function deleteModel(providerId: number, modelId: number): Promise<void> {
+    const api = useApi();
+    await api.del(`/api/providers/${providerId}/models/${modelId}`);
+    await fetchProviderModels(providerId);
+  }
+
+  async function testModel(providerId: number, modelId: number): Promise<TestProviderResult> {
+    const api = useApi();
+    const res = await api.post<{ success: boolean; data: TestProviderResult }>(
+      `/api/providers/${providerId}/models/${modelId}/test`,
+      {},
+    );
+    await fetchProviderModels(providerId);
+    return res.data;
+  }
+
+  async function setProviderDefaultModel(providerId: number, modelId: number): Promise<void> {
+    const api = useApi();
+    await api.post(`/api/providers/${providerId}/models/${modelId}/set-default`, {});
+    await Promise.all([fetchProviders(), fetchProviderModels(providerId)]);
+  }
+
+  // ==================== 用户偏好 ====================
+  const userPreferences = ref<UserPreferences>({ defaultProviderId: null });
+
+  async function fetchUserPreferences(): Promise<UserPreferences> {
+    const api = useApi();
+    const res = await api.get<{ success: boolean; data: UserPreferences }>('/api/users/me/preferences');
+    userPreferences.value = res.data;
+    return res.data;
+  }
+
+  async function setDefaultProvider(providerId: number | null): Promise<void> {
+    const api = useApi();
+    const res = await api.put<{ success: boolean; data: UserPreferences }>(
+      '/api/users/me/preferences',
+      { defaultProviderId: providerId },
+    );
+    userPreferences.value = res.data;
+  }
+
+  return {
+    providers, loading, fetchProviders, createProvider, updateProvider, deleteProvider, testDraft, testSaved,
+    modelsByProvider, fetchProviderModels, addModel, updateModel, deleteModel, testModel, setProviderDefaultModel,
+    userPreferences, fetchUserPreferences, setDefaultProvider,
+  };
 });

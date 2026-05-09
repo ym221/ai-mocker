@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerListModulesTool } from './list-modules.js';
+import { registerListModelsTool } from './list-models.js';
 import { registerInspectModuleTool } from './inspect-module.js';
 import { registerGetMockAccessLogTool } from './get-mock-access-log.js';
 import { registerDiffWithOpenApiTool } from './diff-with-openapi.js';
@@ -16,6 +17,7 @@ import { registerGenerateHandoffReportTool } from './generate-handoff-report.js'
 export function registerMcpTools(server: McpServer): void {
   // Read tools
   registerListModulesTool(server);
+  registerListModelsTool(server);
   registerInspectModuleTool(server);     // replaces get_api_doc + get_openapi + get_module_health
   registerGetMockAccessLogTool(server);
   registerDiffWithOpenApiTool(server);

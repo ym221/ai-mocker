@@ -88,17 +88,14 @@ export async function expectToast(page: Page, text: string, timeout = 5000) {
 }
 
 /**
- * 创建新会话:点击"新建对话"按钮,等 SessionConfigDialog 弹出,点"跳过默认"以
- * 使用系统默认 provider/preset 创建 session。适用于"不关心对话配置"的旧测试。
- *
- * Step-MCP-3.4 起,点"新建对话"会弹 dialog 而不是直接建 session。
+ * 创建新会话:点"新建对话"按钮直接创建(不再弹 dialog)。
+ * 使用用户的默认 provider + 该 provider 的默认 model + 无 preset。
  */
 export async function startNewChatSession(page: Page) {
   await page.click('[data-testid="new-session-btn"]');
-  await page.locator('[data-testid="session-config-dialog"]').waitFor({ state: 'visible', timeout: 5000 });
-  await page.click('[data-testid="skip-defaults-btn"]');
-  // Wait for dialog to close before returning
-  await page.locator('[data-testid="session-config-dialog"]').waitFor({ state: 'hidden', timeout: 5000 });
+  // session 创建是异步的,等 chat 路由切到具体会话 + UI 稳定
+  await page.waitForURL(/\/chat\/[\w-]+/, { timeout: 5000 }).catch(() => { /* 已在该路由也算成功 */ });
+  await page.waitForTimeout(300);
 }
 
 // ==================== Fixture bootstrap ====================

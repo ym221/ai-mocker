@@ -12,6 +12,8 @@ export const users = sqliteTable('users', {
   apiKeyHash: text('api_key_hash'),                    // HMAC-SHA256(MCP_API_KEY_SECRET, plain)
   apiKeyCreatedAt: text('api_key_created_at'),
   apiKeyLastUsedAt: text('api_key_last_used_at'),
+  // 用户级偏好:默认 provider id(可空,空则 fallback 到系统 seed 的 id=1)
+  defaultProviderId: integer('default_provider_id'),
   createdAt: text('created_at').default(sql`(datetime('now'))`),
   updatedAt: text('updated_at').default(sql`(datetime('now'))`),
 });
@@ -34,6 +36,22 @@ export const providers = sqliteTable('providers', {
   createdAt: text('created_at').default(sql`(datetime('now'))`),
   updatedAt: text('updated_at').default(sql`(datetime('now'))`),
 });
+
+// ==================== provider_models ====================
+// per-provider 用户维护的预置模型清单(每个 provider 可挂任意多个 model + note + verified 状态)
+export const providerModels = sqliteTable('provider_models', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  providerId: integer('provider_id').notNull().references(() => providers.id, { onDelete: 'cascade' }),
+  modelName: text('model_name').notNull(),
+  note: text('note'),                                  // 用户备注:性能/成本/适合场景等(对话 user-side AI 选 model 用)
+  isVerified: integer('is_verified').default(0),       // 测试连通性结果
+  lastVerifiedAt: text('last_verified_at'),
+  lastVerifiedError: text('last_verified_error'),
+  createdAt: text('created_at').default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').default(sql`(datetime('now'))`),
+}, (t) => ({
+  uniqProviderModel: uniqueIndex('provider_models_provider_model_idx').on(t.providerId, t.modelName),
+}));
 
 // ==================== presets ====================
 export const presets = sqliteTable('presets', {

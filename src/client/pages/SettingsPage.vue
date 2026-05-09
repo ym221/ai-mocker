@@ -8,8 +8,9 @@ import { toast } from '../composables/use-toast';
 import { useConfirm } from '@/composables/use-confirm';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { Plus, Pencil, Trash2, Check, X, Copy, RefreshCw, Key, Zap, CheckCircle2, XCircle } from 'lucide-vue-next';
-import type { TestProviderResult } from '../stores/provider';
+import { Plus, Pencil, Trash2, Check, X, Copy, RefreshCw, Key, Zap, CheckCircle2, XCircle, Star } from 'lucide-vue-next';
+import type { TestProviderResult, ProviderModel } from '../stores/provider';
+import ModelCombobox from '../components/ai/ModelCombobox.vue';
 import { usePageHeader } from '@/composables/use-page-header';
 
 usePageHeader({ title: '设置', description: 'AI 服务商与项目预设管理' });
@@ -123,6 +124,9 @@ const testingSavedId = ref<number | null>(null);
 
 function openProviderForm(provider?: any) {
   draftTestResult.value = null; // 清除上次测试结果
+  editingProviderModels.value = [];
+  newModelName.value = '';
+  newModelNote.value = '';
   if (provider) {
     editingProviderId.value = provider.id;
     providerForm.value = {
@@ -133,6 +137,8 @@ function openProviderForm(provider?: any) {
       defaultModel: provider.defaultModel,
       scope: provider.scope,
     };
+    // 加载该 provider 的预置模型清单
+    loadEditingModels();
   } else {
     editingProviderId.value = null;
     providerForm.value = { name: '', type: 'openai', apiKey: '', baseUrl: '', defaultModel: '', scope: 'private' };
@@ -275,9 +281,107 @@ async function deletePreset(id: number) {
 
 onMounted(() => {
   providerStore.fetchProviders();
+  providerStore.fetchUserPreferences();
   presetStore.fetchPresets();
   loadApiKeyStatus();
 });
+
+// ==== 默认 provider 操作 ====
+async function setAsDefaultProvider(id: number) {
+  try {
+    await providerStore.setDefaultProvider(id);
+    toast.success('已设为默认服务商');
+  } catch (e: any) {
+    toast.error(e?.message || '设置失败');
+  }
+}
+
+// ==== 预置模型管理(在编辑 provider 表单里) ====
+const editingProviderModels = ref<ProviderModel[]>([]);
+const newModelName = ref('');
+const newModelNote = ref('');
+const testingModelId = ref<number | null>(null);
+
+async function loadEditingModels() {
+  if (!editingProviderId.value) {
+    editingProviderModels.value = [];
+    return;
+  }
+  try {
+    editingProviderModels.value = await providerStore.fetchProviderModels(editingProviderId.value);
+  } catch { /* toast in store */ }
+}
+
+async function addNewModel() {
+  if (!editingProviderId.value || !newModelName.value.trim()) {
+    toast.error('请填模型名');
+    return;
+  }
+  try {
+    await providerStore.addModel(editingProviderId.value, newModelName.value.trim(), newModelNote.value.trim() || undefined);
+    newModelName.value = '';
+    newModelNote.value = '';
+    await loadEditingModels();
+    toast.success('已添加');
+  } catch (e: any) {
+    toast.error(e?.message || '添加失败');
+  }
+}
+
+async function updateModelNote(model: ProviderModel, newNote: string) {
+  if (!editingProviderId.value) return;
+  if ((newNote || '') === (model.note || '')) return;
+  try {
+    await providerStore.updateModel(editingProviderId.value, model.id, { note: newNote || null });
+    await loadEditingModels();
+  } catch (e: any) {
+    toast.error(e?.message || '更新失败');
+  }
+}
+
+async function removeModel(model: ProviderModel) {
+  if (!editingProviderId.value) return;
+  const ok = await confirm({
+    title: `删除模型 ${model.modelName}?`,
+    description: model.isDefault ? '这是默认模型,删除后会自动选剩余的第一个(优先已验证的)' : '',
+    variant: 'destructive',
+    confirmText: '删除',
+  });
+  if (!ok) return;
+  try {
+    await providerStore.deleteModel(editingProviderId.value, model.id);
+    await Promise.all([loadEditingModels(), providerStore.fetchProviders()]);
+  } catch (e: any) {
+    toast.error(e?.message || '删除失败');
+  }
+}
+
+async function testModelConn(model: ProviderModel) {
+  if (!editingProviderId.value) return;
+  testingModelId.value = model.id;
+  try {
+    const r = await providerStore.testModel(editingProviderId.value, model.id);
+    if (r.ok) toast.success(`${model.modelName} 测试通过 (${r.latencyMs}ms)`);
+    else toast.error(`${model.modelName}: ${r.errorCode || 'FAILED'} — ${r.hint || r.errorMessage || ''}`);
+    await loadEditingModels();
+  } catch (e: any) {
+    toast.error(e?.message || '测试失败');
+  } finally {
+    testingModelId.value = null;
+  }
+}
+
+async function setModelDefault(model: ProviderModel) {
+  if (!editingProviderId.value) return;
+  try {
+    await providerStore.setProviderDefaultModel(editingProviderId.value, model.id);
+    providerForm.value.defaultModel = model.modelName;
+    await loadEditingModels();
+    toast.success(`已将 ${model.modelName} 设为该服务商默认`);
+  } catch (e: any) {
+    toast.error(e?.message || '设置失败');
+  }
+}
 </script>
 
 <template>
@@ -328,6 +432,14 @@ onMounted(() => {
           <div class="min-w-0 flex-1">
             <div class="font-medium flex items-center gap-2 flex-wrap">
               <span>{{ p.name }}</span>
+              <!-- 默认 provider 标识 -->
+              <span
+                v-if="providerStore.userPreferences.defaultProviderId === p.id"
+                class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-yellow-50 text-yellow-700 border border-yellow-200"
+                :data-testid="`provider-default-badge-${p.id}`"
+              >
+                <Star class="w-3 h-3" /> 默认
+              </span>
               <!-- 验证状态 badge -->
               <span
                 v-if="p.isVerified === 1"
@@ -379,6 +491,15 @@ onMounted(() => {
             >
               <Zap class="w-4 h-4" :class="testingSavedId === p.id ? 'animate-pulse' : ''" />
             </button>
+            <button
+              v-if="providerStore.userPreferences.defaultProviderId !== p.id"
+              @click="setAsDefaultProvider(p.id)"
+              class="p-1.5 rounded hover:bg-yellow-50 text-yellow-600"
+              :title="'设为默认服务商'"
+              :data-testid="`provider-set-default-${p.id}`"
+            >
+              <Star class="w-4 h-4" />
+            </button>
             <button @click="deleteProvider(p.id)" class="p-1.5 rounded hover:bg-destructive/10 text-destructive" :title="'删除'">
               <Trash2 class="w-4 h-4" />
             </button>
@@ -390,8 +511,8 @@ onMounted(() => {
       </div>
 
       <!-- Provider form dialog -->
-      <div v-if="showProviderForm" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click.self="showProviderForm = false">
-        <div class="bg-background border border-border rounded-lg p-6 w-full max-w-md space-y-4">
+      <div v-if="showProviderForm" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" @click.self="showProviderForm = false">
+        <div class="bg-background border border-border rounded-lg p-6 w-full max-w-md space-y-4 max-h-[90vh] overflow-y-auto">
           <h3 class="text-lg font-semibold">{{ editingProviderId ? '编辑服务商' : '添加服务商' }}</h3>
           <div>
             <label class="text-sm font-medium">名称</label>
@@ -417,7 +538,13 @@ onMounted(() => {
           </div>
           <div>
             <label class="text-sm font-medium">默认模型</label>
-            <Input v-model="providerForm.defaultModel" placeholder="gpt-4o-mini" class="mt-1" />
+            <ModelCombobox
+              v-model="providerForm.defaultModel"
+              :suggestions="editingProviderModels"
+              placeholder="如 gpt-4o-mini / deepseek-chat / claude-sonnet-4-5-20250929"
+              testid="provider-form-default-model"
+              class="mt-1"
+            />
           </div>
           <div>
             <label class="text-sm font-medium">可见范围</label>
@@ -425,6 +552,92 @@ onMounted(() => {
               <option value="private">私有</option>
               <option value="public">公开</option>
             </select>
+          </div>
+
+          <!-- 预置模型管理面板(仅编辑模式) -->
+          <div v-if="editingProviderId" class="border-t pt-4 space-y-3" data-testid="provider-models-panel">
+            <div class="flex items-center justify-between">
+              <label class="text-sm font-medium">预置模型清单</label>
+              <span class="text-xs text-muted-foreground">{{ editingProviderModels.length }} 个</span>
+            </div>
+            <div v-if="editingProviderModels.length === 0" class="text-xs text-muted-foreground py-2">
+              暂无预置模型 — 第一个保存的模型会自动成为默认
+            </div>
+            <div
+              v-for="m in editingProviderModels"
+              :key="m.id"
+              class="border border-border rounded p-2 space-y-1"
+              :data-testid="`provider-model-row-${m.id}`"
+            >
+              <div class="flex items-center gap-2">
+                <span
+                  v-if="m.isVerified === 1"
+                  class="text-xs px-1.5 py-0.5 rounded bg-green-50 text-green-700 border border-green-200"
+                  title="测试已通过"
+                >✅</span>
+                <span
+                  v-else-if="m.lastVerifiedAt"
+                  class="text-xs px-1.5 py-0.5 rounded bg-red-50 text-red-700 border border-red-200"
+                  :title="m.lastVerifiedError || '上次测试失败'"
+                >❌</span>
+                <span
+                  v-else
+                  class="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200"
+                  title="未测试"
+                >⚪</span>
+                <span class="text-sm font-mono flex-1 truncate" :title="m.modelName">{{ m.modelName }}</span>
+                <span
+                  v-if="m.isDefault"
+                  class="text-xs px-1.5 py-0.5 rounded bg-yellow-50 text-yellow-700 border border-yellow-200"
+                >默认</span>
+                <button
+                  @click="testModelConn(m)"
+                  :disabled="testingModelId === m.id"
+                  class="p-1 rounded hover:bg-accent disabled:opacity-50"
+                  :title="'测试'"
+                  :data-testid="`provider-model-test-${m.id}`"
+                >
+                  <Zap class="w-3.5 h-3.5" :class="testingModelId === m.id ? 'animate-pulse' : ''" />
+                </button>
+                <button
+                  v-if="!m.isDefault"
+                  @click="setModelDefault(m)"
+                  class="p-1 rounded hover:bg-yellow-50 text-yellow-600"
+                  :title="'设为该服务商默认'"
+                  :data-testid="`provider-model-set-default-${m.id}`"
+                >
+                  <Star class="w-3.5 h-3.5" />
+                </button>
+                <button
+                  @click="removeModel(m)"
+                  class="p-1 rounded hover:bg-destructive/10 text-destructive"
+                  :title="'删除'"
+                  :data-testid="`provider-model-delete-${m.id}`"
+                >
+                  <Trash2 class="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <Input
+                :model-value="m.note ?? ''"
+                @blur="(e) => updateModelNote(m, e.target.value)"
+                placeholder="备注(可选,如 '便宜快速' / '推理重慢但强')"
+                class="text-xs h-7"
+                :data-testid="`provider-model-note-${m.id}`"
+              />
+            </div>
+            <!-- 新增 model -->
+            <div class="border border-dashed border-border rounded p-2 space-y-1">
+              <div class="flex gap-2">
+                <Input v-model="newModelName" placeholder="新模型名" class="flex-1 text-sm" data-testid="new-model-name" />
+                <Button size="sm" @click="addNewModel" data-testid="new-model-add-btn">
+                  <Plus class="w-4 h-4" />
+                </Button>
+              </div>
+              <Input v-model="newModelNote" placeholder="备注(可选)" class="text-xs h-7" data-testid="new-model-note" />
+            </div>
+          </div>
+          <div v-else class="text-xs text-muted-foreground border-t pt-2">
+            保存后可在此管理预置模型清单
           </div>
           <!-- 测试结果显示 -->
           <div

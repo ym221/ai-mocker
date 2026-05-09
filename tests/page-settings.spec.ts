@@ -44,7 +44,7 @@ test.describe('设置页 - Provider CRUD', () => {
     await expect(page.locator('h3')).toContainText('添加服务商');
     // 表单字段可见
     await expect(page.locator('input[placeholder="我的 OpenAI 服务商"]')).toBeVisible();
-    await expect(page.locator('input[placeholder="gpt-4o-mini"]')).toBeVisible();
+    await expect(page.locator('[data-testid="provider-form-default-model"]')).toBeVisible();
   });
 
   test('S05 Provider 表单字段 placeholder', async ({ page }) => {
@@ -52,7 +52,7 @@ test.describe('设置页 - Provider CRUD', () => {
     await page.click('text=添加服务商');
     await expect(page.locator('input[placeholder="我的 OpenAI 服务商"]')).toBeVisible();
     await expect(page.locator('input[placeholder="https://api.openai.com/v1"]')).toBeVisible();
-    await expect(page.locator('input[placeholder="gpt-4o-mini"]')).toBeVisible();
+    await expect(page.locator('[data-testid="provider-form-default-model"]')).toBeVisible();
   });
 
   test('S06 Type 下拉选项', async ({ page }) => {
@@ -69,7 +69,7 @@ test.describe('设置页 - Provider CRUD', () => {
     await page.goto('/settings');
     await page.click('text=添加服务商');
     await page.fill('input[placeholder="我的 OpenAI 服务商"]', `Test Prov ${Date.now().toString(36)}`);
-    await page.fill('input[placeholder="gpt-4o-mini"]', 'gpt-test');
+    await page.fill('[data-testid="provider-form-default-model"]', 'gpt-test');
     await page.click('button:has-text("保存")');
     await expectToast(page, '服务商已保存');
     // 模态框应关闭

@@ -2,24 +2,23 @@ import type { FastifyInstance } from 'fastify';
 import { eq, and, desc } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 import { db } from '../core/database.js';
-import { sessions, messages, users, providers, providerModels } from '../core/schema.js';
+import { sessions, messages, providers, providerModels } from '../core/schema.js';
 import { authMiddleware } from '../core/auth.js';
 import { success } from '../core/response.js';
 import { aggregateTimeline } from '../core/timeline-aggregator.js';
+import { resolveDefaultProviderForUser } from '../core/provider-resolver.js';
 
 /**
  * 解析创建/更新 session 时的 effective providerId:
  * - 显式传 → 用它
- * - 没传 → 用用户 default_provider_id
- * - 用户没设 → fallback 到 id=1(seed 兜底 provider)
+ * - 没传 → 走 resolveDefaultProviderForUser 共享逻辑(优先用户 ★ 默认,然后 user-private,
+ *   再 public-fallback),与 MCP / chat-runner 完全一致,避免"用户设了 moyu 默认但 chat
+ *   / MCP 仍用 id=1 公共 provider"那类 mismatch
  */
 function resolveProviderId(userId: number, explicit: number | null | undefined): number | null {
   if (typeof explicit === 'number' && explicit > 0) return explicit;
-  const user = db.select().from(users).where(eq(users.id, userId)).get();
-  if (user?.defaultProviderId) return user.defaultProviderId;
-  // fallback: id=1(server.ts seed 创建的兜底 provider)
-  const seed = db.select().from(providers).where(eq(providers.id, 1)).get();
-  return seed ? 1 : null;
+  const r = resolveDefaultProviderForUser(userId);
+  return r?.id ?? null;
 }
 
 /**

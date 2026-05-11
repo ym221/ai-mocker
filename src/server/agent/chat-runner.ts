@@ -18,6 +18,7 @@ import { db, sqlite } from '../core/database.js';
 import { providers, presets, sessions, messages, modules, messageEvents } from '../core/schema.js';
 import { decrypt } from '../core/encryption.js';
 import { computeModuleHealth } from '../core/module-health.js';
+import { resolveDefaultProviderForUser, findAccessibleProvider } from '../core/provider-resolver.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { buildTools } from './tool-registry.js';
 import { ThinkingParser } from './thinking-adapter.js';
@@ -725,16 +726,38 @@ export class ChatRunner {
 
     try {
       // ===== Load provider =====
-      const providerId = session.providerId || 1;
+      // 历史:用 `session.providerId || 1` 硬回退到 id=1,导致老 session 或 providerId
+      // 为 null 的 session 强行用 seed 兜底 provider(常无 API Key)。
+      // 现统一走 resolveDefaultProviderForUser:用户 ★ 默认 → user-private → public。
+      let providerId: number | null = null;
+      if (session.providerId != null) {
+        const accessible = findAccessibleProvider(userId, session.providerId);
+        if (accessible) providerId = accessible.id;
+      }
+      if (providerId == null) {
+        const fallback = resolveDefaultProviderForUser(userId);
+        if (fallback) providerId = fallback.id;
+      }
+      if (providerId == null) {
+        throw new Error('未配置可用的 AI 服务商。请前往 Settings → AI 服务商 添加并验证一个,或将已有 provider 标记为「默认」。');
+      }
       const provider = db.select().from(providers).where(eq(providers.id, providerId)).get();
-      if (!provider) throw new Error('AI Provider not configured.');
+      if (!provider) {
+        throw new Error(`Provider id=${providerId} 不存在(可能已被删除)。请刷新页面后在对话栏点击切换服务商。`);
+      }
 
       let apiKey = '';
       if (provider.apiKeyEncrypted) {
         try { apiKey = decrypt(provider.apiKeyEncrypted); }
-        catch { throw new Error('Failed to decrypt API key.'); }
+        catch { throw new Error(`Provider "${provider.name}" (id=${provider.id}) 的 API Key 解密失败。请前往 Settings → AI 服务商 重新输入 API Key。`); }
       }
-      if (!apiKey) throw new Error('AI Provider API Key is not configured.');
+      if (!apiKey) {
+        const scopeHint = provider.scope === 'public' ? '(公共服务商,平台未配置 Key)' : '';
+        throw new Error(
+          `Provider "${provider.name}" (id=${provider.id}, ${provider.type})${scopeHint} 未配置 API Key。`
+          + `请在 Settings → AI 服务商 给它填上 Key,或点击对话栏切换到已配置 Key 的服务商(如已设默认会自动选用)。`,
+        );
+      }
 
       const model = buildModel({
         type: provider.type,

@@ -14,8 +14,9 @@
 import { randomUUID } from 'crypto';
 import { and, eq, desc, or } from 'drizzle-orm';
 import { db, sqlite } from '../../core/database.js';
-import { sessions, providers, presets, messages, messageEvents } from '../../core/schema.js';
+import { sessions, providers, presets, messageEvents } from '../../core/schema.js';
 import { ChatRunner, type StreamEvent } from '../../agent/chat-runner.js';
+import { resolveDefaultProviderForUser } from '../../core/provider-resolver.js';
 
 export interface HeadlessProgress {
   seq: number;
@@ -64,30 +65,13 @@ export interface AttachOptions {
 }
 
 function pickProviderForUser(userId: number): { id: number; defaultModel: string } | null {
-  // 显式指定（测试 / 用户偏好）
-  const envPreferred = Number(process.env.MCP_DEFAULT_PROVIDER_ID || '0');
-  if (envPreferred > 0) {
-    const p = db.select().from(providers)
-      .where(and(eq(providers.id, envPreferred), eq(providers.isActive, 1)))
-      .get();
-    if (p) return { id: p.id, defaultModel: p.defaultModel };
-  }
-
-  // 先找 public active（通常是免费/平台默认的 seed provider）
-  const pub = db.select().from(providers)
-    .where(and(eq(providers.scope, 'public'), eq(providers.isActive, 1)))
-    .orderBy(providers.id)  // 最早的 public = seed
-    .get();
-  if (pub) return { id: pub.id, defaultModel: pub.defaultModel };
-
-  // 兜底：user-owned private active provider
-  const owned = db.select().from(providers)
-    .where(and(eq(providers.ownerId, userId), eq(providers.isActive, 1)))
-    .orderBy(desc(providers.id))
-    .get();
-  if (owned) return { id: owned.id, defaultModel: owned.defaultModel };
-
-  return null;
+  // 统一走共享 resolveDefaultProviderForUser:
+  //   env > users.defaultProviderId > user-private active > public-fallback
+  // 此前 MCP 这里把 public 排在 user-private 前面,导致用户在 Settings ★ 默认
+  // 的私有 provider (如 moyu/anthropic) 被 id=1 的 public 占位 provider
+  // (Default Provider/openai/无 API Key) 覆盖,MCP 调用必报 "API Key is not configured"。
+  const r = resolveDefaultProviderForUser(userId);
+  return r ? { id: r.id, defaultModel: r.defaultModel } : null;
 }
 
 /** StreamEvent → progress 摘要（不泄漏具体内容）。 */

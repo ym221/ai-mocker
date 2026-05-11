@@ -2,6 +2,7 @@
 import { computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useChatStore } from '../stores/chat';
+import { useProviderStore } from '../stores/provider';
 import ChatPanel from '../components/chat/ChatPanel.vue';
 import { Button } from '../components/ui/button';
 import { Plus, Trash2, MessageSquare } from 'lucide-vue-next';
@@ -10,6 +11,7 @@ import { toast } from '../composables/use-toast';
 const route = useRoute();
 const router = useRouter();
 const chatStore = useChatStore();
+const providerStore = useProviderStore();
 
 const displayMessages = computed(() => chatStore.activeStream?.messages ?? []);
 const isLoading = computed(() => {
@@ -30,10 +32,23 @@ const isLoading = computed(() => {
 // ==================== New-session(直接创建,不弹 dialog) ====================
 // 后端 resolveProviderId 会自动用用户的 default_provider_id;model 自动用该 provider 的 default_model;
 // preset 默认不选。用户想换 provider/model 在对话内 SessionMetaBar 切换。
+//
+// 若 SessionMetaBar 在无 session 状态下被用户改过 provider/model/preset,
+// 这些选择会落在 chatStore.pendingSessionConfig 中;createSession 时一并带上。
+
+function consumePendingConfig() {
+  const p = chatStore.pendingSessionConfig;
+  const opts: { providerId?: number | null; model?: string | null; presetId?: number | null } = {};
+  if (p.providerId != null) opts.providerId = p.providerId;
+  if (p.model != null) opts.model = p.model;
+  if (p.presetId != null) opts.presetId = p.presetId;
+  return opts;
+}
 
 async function newSession() {
   try {
-    const session = await chatStore.createSession();
+    const session = await chatStore.createSession(consumePendingConfig());
+    chatStore.resetPendingSessionConfig();
     await selectSession(session.id);
   } catch (e: any) {
     toast.error(e?.message || '创建会话失败');
@@ -58,8 +73,10 @@ async function selectSession(sessionId: string) {
 async function handleSend(message: string) {
   let sid = chatStore.activeSessionId;
   if (!sid) {
-    // 后端 resolveProviderId 自动用默认 provider + 默认 model
-    const session = await chatStore.createSession();
+    // 后端 resolveProviderId 自动用默认 provider + 默认 model;
+    // pending overrides 由 SessionMetaBar 写入,这里消费一次
+    const session = await chatStore.createSession(consumePendingConfig());
+    chatStore.resetPendingSessionConfig();
     sid = session.id;
     await selectSession(sid);
   }
@@ -86,6 +103,11 @@ async function handleDeleteSession(id: string) {
 // ========== Init ==========
 
 onMounted(async () => {
+  // Load user-default provider preference up front so the SessionMetaBar can
+  // show a sensible "默认服务商 (默认)" label even before the user clicks anything.
+  if (providerStore.userPreferences.defaultProviderId == null) {
+    await providerStore.fetchUserPreferences().catch(() => {});
+  }
   await chatStore.fetchSessions();
   const sessionId = route.params.sessionId as string;
   if (sessionId) {

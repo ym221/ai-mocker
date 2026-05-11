@@ -234,11 +234,34 @@ function applyEvent(s: StreamState, ev: StreamEvent): void {
 
 // ==================== Store ====================
 
+/**
+ * Config the user picked BEFORE any session exists for the current view.
+ * When the user enters /chat with zero sessions, the meta-bar lets them
+ * pre-select provider/model/preset; this object holds those choices until
+ * ChatPage.handleSend() calls createSession() and consumes them.
+ */
+export interface PendingSessionConfig {
+  providerId: number | null;
+  model: string | null;
+  presetId: number | null;
+}
+
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<Session[]>([]);
   const activeSessionId = ref<string | null>(null);
   const loading = ref(false);
   const streams = ref<Map<string, StreamState>>(new Map());
+  const pendingSessionConfig = ref<PendingSessionConfig>({
+    providerId: null, model: null, presetId: null,
+  });
+
+  function setPendingSessionConfig(patch: Partial<PendingSessionConfig>) {
+    pendingSessionConfig.value = { ...pendingSessionConfig.value, ...patch };
+  }
+
+  function resetPendingSessionConfig() {
+    pendingSessionConfig.value = { providerId: null, model: null, presetId: null };
+  }
 
   function getStream(sessionId: string): StreamState {
     let s = streams.value.get(sessionId);
@@ -549,6 +572,9 @@ export const useChatStore = defineStore('chat', () => {
     loading,
     streams,
     activeStream,
+    pendingSessionConfig,
+    setPendingSessionConfig,
+    resetPendingSessionConfig,
     getStream,
     fetchSessions,
     createSession,

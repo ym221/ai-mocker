@@ -77,6 +77,24 @@ function humanizeChatError(raw: string): string {
   if (lower.includes('invalid schema') || lower.includes('schema must be')) {
     return `AI 工具 schema 不被接受 (${raw})。换 model 试试,或反馈给开发者。`;
   }
+  if (lower.includes('content_filter') || lower.includes('content filter') || lower.includes('safety') || lower.includes('blocked')) {
+    return `请求被模型内容安全策略拦截 (${raw})。调整提示词或换 provider 重试。`;
+  }
+  if (lower.includes('context length') || lower.includes('context_length') || lower.includes('maximum context') || lower.includes('too long')) {
+    return `上下文长度超过模型限制 (${raw})。清空较早的对话/换支持更长上下文的 model。`;
+  }
+  if (lower.includes('model_not_found') || lower.includes('model not found') || lower.includes('no such model') || lower.includes('unknown model')) {
+    return `模型不存在或当前 provider 不可用 (${raw})。在 Settings → AI Providers 确认 model 名称。`;
+  }
+  if (lower.includes('insufficient_quota') || lower.includes('quota') || lower.includes('billing') || lower.includes('balance')) {
+    return `provider 账户额度/计费问题 (${raw})。检查账户余额或换 provider。`;
+  }
+  if (lower.includes('503') || lower.includes('service unavailable') || lower.includes('overloaded')) {
+    return `AI 服务暂时不可用 (${raw})。稍后重试或换 provider。`;
+  }
+  if (lower.includes('500') || lower.includes('internal server error') || lower.includes('bad gateway') || lower.includes('502') || lower.includes('504')) {
+    return `AI 服务返回服务器错误 (${raw})。稍后重试或换 provider。`;
+  }
   return raw;
 }
 let heartbeatMsOverride: number | null = null;
@@ -962,6 +980,19 @@ export class ChatRunner {
           sqlite.prepare(`UPDATE messages SET content = ?, message_error = ? WHERE id = ?`)
             .run(finalText, finalAction.message, this.currentMessageId!);
           this.finalize('error', { message: finalAction.message });
+          return;
+        }
+
+        // Empty-response guard: stream ended cleanly but model produced
+        // neither user-visible text NOR any tool call. Previously we'd
+        // finalize('done') → frontend shows neutral "已结束 · 无回复",
+        // which leaves users guessing whether the model failed silently.
+        // Surface as error with actionable hint instead.
+        if (finalText.trim().length === 0 && collectedToolCalls.size === 0) {
+          const emptyMsg = '模型未返回任何内容,本次生成视为失败。常见原因:模型超载/限流、被内容审核拦截、provider 返回空流、或当前 model 无法理解本次请求。建议:稍后重试、换 model 或 provider。';
+          sqlite.prepare(`UPDATE messages SET content = ?, message_error = ? WHERE id = ?`)
+            .run(finalText, emptyMsg, this.currentMessageId!);
+          this.finalize('error', { message: emptyMsg });
           return;
         }
 

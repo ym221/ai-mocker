@@ -9,7 +9,7 @@
  * 即便 session 超时/失败，只要文件齐全 + 表存在 → 模块仍可用。
  */
 
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { resolve, join } from 'path';
 import { pathToFileURL } from 'url';
 import { sqlite } from './database.js';
@@ -87,9 +87,30 @@ export function computeModuleHealth(userId: number, moduleName: string): HealthR
  * 注:cache busting 用 ?probe=ts 让每次 import 走新模块,不污染缓存。
  */
 export async function probeControllerLoadable(userId: number, moduleName: string): Promise<{ ok: boolean; error?: string }> {
-  const controllerPath = join(GENERATED_DIR, String(userId), moduleName, 'controller.ts');
+  const moduleDir = join(GENERATED_DIR, String(userId), moduleName);
+  const controllerPath = join(moduleDir, 'controller.ts');
+
   if (!existsSync(controllerPath)) {
-    return { ok: false, error: 'controller.ts not found' };
+    // 给 AI 看的诊断:列出实际写盘到模块目录的所有文件,帮助 AI 立即看出是
+    //   - 没写 controller.ts(漏文件)
+    //   - typo 写成了 Controller.ts / controller.tsx 等(文件名错)
+    //   - 写到了别的目录(完全丢失)
+    let context = '';
+    if (existsSync(moduleDir)) {
+      try {
+        const files = readdirSync(moduleDir);
+        context = ` 模块目录 generated/${userId}/${moduleName}/ 存在,实际文件: [${files.join(', ')}]。`;
+        // 检测大小写 typo
+        const typo = files.find(f => f.toLowerCase() === 'controller.ts' && f !== 'controller.ts');
+        if (typo) context += ` 检测到大小写 typo:"${typo}" 应改为 "controller.ts"。`;
+      } catch { /* ignore */ }
+    } else {
+      context = ` 模块目录 generated/${userId}/${moduleName}/ 不存在 — write_files / write_file 时 path 第一段是否写错了模块名?`;
+    }
+    return {
+      ok: false,
+      error: `controller.ts not found at generated/${userId}/${moduleName}/controller.ts.${context} 请 write_file('${moduleName}/controller.ts', <content>) 写入。`,
+    };
   }
   try {
     const url = pathToFileURL(controllerPath).href + `?probe=${Date.now()}`;

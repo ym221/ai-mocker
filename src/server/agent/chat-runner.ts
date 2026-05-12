@@ -1055,12 +1055,30 @@ export class ChatRunner {
         }
 
         // Module-quality guards(只对声明了 moduleIntent 的会话生效):防止 AI "假装完成"
-        // 实际模块不可用。两个独立检查:
+        // 实际模块不可用。三层串行检查:
+        //   (0) 物理健康度 - 5 文件齐全 + _meta.json 可解析 + SQLite 表存在
         //   (a) run_test guard - AI 跑过 run_test 但 failures>0 不允许声明 done
         //   (b) controller-load probe - 物理 import controller.ts 看是否 alias / 语法 throw
         // 任一失败 → finalize 'error' + 给 AI 看可执行修复建议。
         if (this.moduleIntent) {
           const mn = this.moduleIntent.moduleName;
+
+          // (0) 物理健康度 - 抓 AI 谎报"5 文件全写"但 controller.ts 丢失之类的场景
+          const health = computeModuleHealth(userId, mn);
+          if (health.health !== 'healthy') {
+            const parts: string[] = [];
+            if (health.missing.length > 0) parts.push(`缺少文件: [${health.missing.join(', ')}]`);
+            if (!health.metaValid) parts.push('_meta.json 解析失败或缺 entities[0].tableName');
+            if (!health.hasTable && health.tableName) parts.push(`SQLite 表未创建(schema.sql 没成功 exec? 检查表名 ${health.tableName})`);
+            const healthMsg =
+              `模块 "${mn}" 物理健康检查失败(health=${health.health}): ${parts.join('; ')}。`
+              + ' 请逐项补齐。常见原因:(1) write_files 的 files 数组遗漏了某文件 → 用 write_file 单独补;'
+              + ' (2) schema.sql exec 失败导致表未建 → 检查 SQL 语法;(3) _meta.json 没写 entities[0].tableName。';
+            sqlite.prepare(`UPDATE messages SET content = ?, message_error = ? WHERE id = ?`)
+              .run(finalText, healthMsg, this.currentMessageId!);
+            this.finalize('error', { message: healthMsg });
+            return;
+          }
 
           // (a) run_test failures
           if (this.lastRunTestFailures > 0) {

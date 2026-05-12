@@ -238,23 +238,27 @@ export default async function mockRouter(app: FastifyInstance) {
         }
 
         // Legacy type-based dispatch (single-entity modules).
+        // 统一传 req-style `{ body, query, params }`,跟 named-handler 完全一致。
+        // 这是 LLM 默认会写的 express-style 签名(claude-sonnet 等强模型实测都用这种),
+        // 此前传单参数(query / id / body)的设计跟现代 LLM 输出对不齐,run_test 必挂。
+        const req = { body, query, params: matchedParams };
         switch (matchedEndpoint!.type) {
           case 'list':
-            return ctrl.list(query);
+            return ctrl.list(req);
           case 'detail':
-            return ctrl.getById(matchedParams.id);
+            return ctrl.getById(req);
           case 'create':
-            return ctrl.create(body);
+            return ctrl.create(req);
           case 'update':
-            return ctrl.update(matchedParams.id, body);
+            return ctrl.update(req);
           case 'delete':
-            return ctrl.remove(matchedParams.id);
+            return ctrl.remove(req);
           case 'custom': {
             const handlerName = matchedEndpoint!.handler || matchedEndpoint!.name;
             if (!ctrl[handlerName]) {
               throw new Error(`Handler "${handlerName}" not found in controller`);
             }
-            return ctrl[handlerName](body, query, matchedParams);
+            return ctrl[handlerName](req);
           }
           default:
             throw new Error(`Unknown endpoint type: ${matchedEndpoint!.type}`);

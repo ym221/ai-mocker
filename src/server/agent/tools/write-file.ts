@@ -117,23 +117,45 @@ function reconcileSchemaWithPhysical(injectedSql: string): { altered: string[]; 
   return { altered, warnings };
 }
 
+/** Exported for unit tests + write-files.ts sharing. */
+export function normalizeUserPath(userPath: string): string {
+  // AI 经常把完整路径 "generated/<moduleName>/..." 当作 path 传过来。框架的 path
+  // 已经默认是 generated/<userId>/ 下的相对路径,再带 generated/ 前缀就会让文件
+  // 落到 generated/<userId>/generated/<moduleName>/...,modules 表 _meta.json
+  // sync 从 segments[0] 提取的 moduleName 会变成 "generated"。这是真实生产中
+  // moyu-claude / claude-sonnet 等高档位模型也会犯的错(它们看到 system prompt 里
+  // 提到 "generated/{userId}/" 就以为自己也得带这个前缀)。
+  // 修复:静默剥除领头的 generated/ 前缀;只有用户**显式**写 generated/<userId>/...
+  // 这种试图越权的情况才会进 validatePath 的 traversal 检查被拒。
+  let p = userPath.replace(/\\/g, '/').replace(/^\.\//, '');
+  // 剥多余前导 generated/
+  p = p.replace(/^(?:generated\/)+/, '');
+  return p;
+}
+
 function validatePath(userPath: string, userId: number): string {
+  const normalized = normalizeUserPath(userPath);
+
   // Prevent directory traversal and absolute paths
-  if (userPath.includes('..') || /^[/\\]/.test(userPath) || /^[a-zA-Z]:/.test(userPath)) {
+  if (normalized.includes('..') || /^[/\\]/.test(normalized) || /^[a-zA-Z]:/.test(normalized)) {
     throw new Error('Invalid path: directory traversal or absolute paths are not allowed');
   }
 
-  const fullPath = resolve(join(GENERATED_DIR, String(userId), userPath));
+  const fullPath = resolve(join(GENERATED_DIR, String(userId), normalized));
   const expectedPrefix = resolve(join(GENERATED_DIR, String(userId)));
 
   if (!fullPath.startsWith(expectedPrefix)) {
     throw new Error('Invalid path: must be within generated/{userId}/ directory');
   }
 
+  // 告诉调用方:如果做了 normalize(剥前缀),返实际相对 path 供 _meta sync 提取 moduleName
   return fullPath;
 }
 
 export async function writeFile(userId: number, path: string, content: string): Promise<string> {
+  // 关键:先 normalize(剥 generated/ / 反斜杠归一化),然后整个函数内部都用 normalized
+  // path,确保 _meta.json sync 时 segments[0] 拿到的是真正的 moduleName(不是 'generated')。
+  path = normalizeUserPath(path);
   const fullPath = validatePath(path, userId);
 
   // _meta.json 写盘前先做契约硬校验:basePath / endpoints[].path / 名字全局唯一。

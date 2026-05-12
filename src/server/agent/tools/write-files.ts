@@ -53,11 +53,19 @@ export interface WriteFilesResult {
 // Path validation (shared with write-file.ts)
 // ============================================================================
 
+/** Normalize AI-supplied path: strip leading `generated/` prefix (AI 经常误带). */
+function normalizeUserPath(userPath: string): string {
+  let p = userPath.replace(/\\/g, '/').replace(/^\.\//, '');
+  p = p.replace(/^(?:generated\/)+/, '');
+  return p;
+}
+
 function validatePath(userPath: string, userId: number): string {
-  if (userPath.includes('..') || /^[/\\]/.test(userPath) || /^[a-zA-Z]:/.test(userPath)) {
+  const normalized = normalizeUserPath(userPath);
+  if (normalized.includes('..') || /^[/\\]/.test(normalized) || /^[a-zA-Z]:/.test(normalized)) {
     throw new Error(`Invalid path "${userPath}": directory traversal or absolute paths are not allowed`);
   }
-  const fullPath = resolve(join(GENERATED_DIR, String(userId), userPath));
+  const fullPath = resolve(join(GENERATED_DIR, String(userId), normalized));
   const expectedPrefix = resolve(join(GENERATED_DIR, String(userId)));
   if (!fullPath.startsWith(expectedPrefix)) {
     throw new Error(`Invalid path "${userPath}": must be within generated/${userId}/ directory`);
@@ -172,7 +180,9 @@ export async function writeFiles(userId: number, input: WriteFilesInput): Promis
       if (existedBefore) {
         try { prevContent = readFileSync(fullPath, 'utf-8'); } catch { prevContent = null; }
       }
-      prepared.push({ path: f.path, content: f.content, fullPath, prevContent, existedBefore });
+      // 关键:存 normalize 后的 path,后续 _meta.json sync 用 segments[0] 提模块名时
+      // 不会被 "generated/<name>/_meta.json" 这种 AI 错传干扰
+      prepared.push({ path: normalizeUserPath(f.path), content: f.content, fullPath, prevContent, existedBefore });
     } catch (err) {
       return {
         success: false,

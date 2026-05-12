@@ -9,6 +9,7 @@ import { Play, Database, BookOpen, Copy, Download, FileJson, RefreshCw, AlertCir
 import DataTable from '../components/data/DataTable.vue';
 import TimelineView from '../components/observability/TimelineView.vue';
 import { usePageHeader } from '@/composables/use-page-header';
+import { copyToClipboard } from '@/composables/use-clipboard';
 import MarkdownIt from 'markdown-it';
 
 const route = useRoute();
@@ -72,10 +73,10 @@ function buildFullUrl(path: string): string {
 }
 async function copyUrl(url: string) {
   try {
-    await navigator.clipboard.writeText(url);
+    await copyToClipboard(url);
     toast.success('已复制 URL');
   } catch {
-    toast.error('复制失败');
+    toast.error('复制失败,请手动选中地址复制');
   }
 }
 
@@ -90,7 +91,7 @@ async function loadDoc() {
 // ===== 文档操作：复制 / 下载 Markdown / 导出 OpenAPI =====
 async function copyDoc() {
   try {
-    await navigator.clipboard.writeText(docContent.value || '');
+    await copyToClipboard(docContent.value || '');
     toast.success('已复制文档');
   } catch {
     toast.error('复制失败');

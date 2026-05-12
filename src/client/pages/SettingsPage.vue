@@ -12,6 +12,7 @@ import { Plus, Pencil, Trash2, Check, X, Copy, RefreshCw, Key, Zap, CheckCircle2
 import type { TestProviderResult, ProviderModel } from '../stores/provider';
 import ModelCombobox from '../components/ai/ModelCombobox.vue';
 import { usePageHeader } from '@/composables/use-page-header';
+import { copyToClipboard } from '@/composables/use-clipboard';
 
 usePageHeader({ title: '设置', description: 'AI 服务商与项目预设管理' });
 
@@ -76,7 +77,7 @@ async function revokeApiKey() {
 async function copyApiKey() {
   if (!newApiKey.value) return;
   try {
-    await navigator.clipboard.writeText(newApiKey.value);
+    await copyToClipboard(newApiKey.value);
     toast.success('已复制到剪贴板');
   } catch {
     toast.error('复制失败，请手动选中文本');
@@ -98,7 +99,7 @@ function mcpConfigSnippet(apiKey: string): string {
 async function copyMcpConfig() {
   const key = newApiKey.value || '<your-api-key>';
   try {
-    await navigator.clipboard.writeText(mcpConfigSnippet(key));
+    await copyToClipboard(mcpConfigSnippet(key));
     toast.success('配置片段已复制');
   } catch {
     toast.error('复制失败');

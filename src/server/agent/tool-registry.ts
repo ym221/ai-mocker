@@ -103,16 +103,42 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         + '不代表已完成。调用本工具后你必须紧接着调用 write_files（优先）或多次 write_file '
         + '把 5 个必需文件（_meta.json / schema.sql / controller.ts / test.ts / api-doc.md）'
         + '落盘。不允许只声明意图就结束回复——框架会检测空产出并自动注入提示强制重试，'
-        + '两次后仍空会终止并报错。',
+        + '两次后仍空会终止并报错。\n\n'
+        + 'moduleName 优先从用户消息里提取(如"模块名: xxx" / "create xxx module");'
+        + '用户没明示就**你自己想一个**snake_case 英文名(基于业务关键词,如"订单管理"→ "order"、'
+        + '"直签酒店财务"→ "hotel_finance")。**不要传空字符串**。',
       parameters: z.object({
-        moduleName: z.string().describe('Module name (英文，与文件目录一致)'),
-        operation: z.enum(['create', 'edit']).describe('create = 新建模块; edit = 修改已有模块'),
+        moduleName: z.string().optional().describe('Module name (英文 snake_case)。可省略 — 框架会从用户消息推断;推断失败会报错让你重试时显式提供'),
+        operation: z.enum(['create', 'edit']).optional().describe('create = 新建模块; edit = 修改已有模块。可省略 — 框架按模块是否存在自动判断'),
       }),
       execute: async ({ moduleName, operation }) => {
         if (!runner) {
           return { success: true, message: 'No runner context', moduleName, operation };
         }
-        const result = runner.applyModuleIntent(userId, { moduleName, operation });
+        // moduleName 为空时从 user content 兜底提取(claude / gpt-4 等强模型实测有时会传 args={},
+        // zod schema 强制 required 会让 tool_result 永不返回 → runner 卡死;改 optional + 推断更稳)。
+        let effectiveName = (typeof moduleName === 'string' && moduleName.trim()) ? moduleName.trim() : '';
+        if (!effectiveName) {
+          const userContent = runner.getCurrentUserContent() || '';
+          // 匹配 "模块名必须是: \"xxx\"" / "moduleName: xxx" / "模块名:xxx" 等常见格式
+          const patterns = [
+            /模块名(?:必须是|是|:)?\s*[":：]?\s*["'`]?([a-zA-Z][a-zA-Z0-9_]+)["'`]?/,
+            /moduleName\s*[:=]\s*["'`]?([a-zA-Z][a-zA-Z0-9_]+)["'`]?/i,
+            /create\s+(?:an?\s+)?([a-z][a-z0-9_]+)\s+module/i,
+          ];
+          for (const pat of patterns) {
+            const m = userContent.match(pat);
+            if (m && m[1]) { effectiveName = m[1]; break; }
+          }
+        }
+        if (!effectiveName) {
+          // 给 AI 看的清晰错误,避免卡死;ai-sdk 会把 throw 转 tool_result error 让 AI 重试
+          throw new Error(
+            'set_module_intent 调用缺少 moduleName。用户消息里没提供模块名,你必须自己想一个 snake_case 英文名'
+            + '(基于业务关键词推断,如 "订单管理" → "order"、"hotel_finance" 等),然后**重新调用本工具时传 moduleName**。',
+          );
+        }
+        const result = runner.applyModuleIntent(userId, { moduleName: effectiveName, operation });
         return { success: true, ...result };
       },
     }),

@@ -149,6 +149,9 @@ export class ChatRunner {
   private pendingCardModules: Set<string> = new Set();
   private currentUserContent = '';
 
+  /** Expose current user content so tools (e.g. set_module_intent) can fallback when AI omits args. */
+  getCurrentUserContent(): string { return this.currentUserContent; }
+
   private constructor(sessionId: string) {
     this.sessionId = sessionId;
     this.emitter.setMaxListeners(50);

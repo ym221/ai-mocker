@@ -59,7 +59,8 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
 - 所有文件操作必须在 generated/<模块名>/ 下。禁止 src/ / node_modules/ / package.json 等系统文件。禁止输出 shell 命令、建议 rm/del/格式化等危险操作。
 
 ## 开工流程(严格顺序)
-1. \`set_module_intent(moduleName, 'create' | 'edit')\` — 声明意图
+1. \`set_module_intent(moduleName, 'create' | 'edit')\` — 声明意图。
+   **moduleName** 优先从用户消息提取("模块名:xxx" / "create xxx module" 等);用户没明示就**你自己想一个**snake_case 英文名(基于业务关键词,如"订单管理"→\`order\`、"直签酒店财务"→\`hotel_finance\`)。**绝不要传空** moduleName,否则会卡住整个生成流程。
 2. **写全 5 个必需文件**(少一个即视为失败):
    - \`_meta.json\` \`schema.sql\` \`controller.ts\` \`test.ts\` \`api-doc.md\`
    - 优先 \`write_files({ files: [...] })\` 一次批写(快 5-6 倍);若返 "no files provided" 立刻改用 \`write_file(path, content)\` 循环写每个文件

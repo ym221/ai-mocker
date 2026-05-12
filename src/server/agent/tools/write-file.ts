@@ -3,6 +3,7 @@ import { dirname, join, resolve, normalize } from 'path';
 import { sqlite, db } from '../../core/database.js';
 import { modules } from '../../core/schema.js';
 import { eq, and } from 'drizzle-orm';
+import { validateMetaContract, formatContractErrors } from './meta-contract.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -135,6 +136,28 @@ function validatePath(userPath: string, userId: number): string {
 export async function writeFile(userId: number, path: string, content: string): Promise<string> {
   const fullPath = validatePath(path, userId);
 
+  // _meta.json 写盘前先做契约硬校验:basePath / endpoints[].path / 名字全局唯一。
+  // 任一不合规 → throw,上层 instrument() 转成 tool_result error 给 AI 看修复建议,
+  // 绝不让坏 meta 落盘(否则模块永远无法访问)。
+  let normalizedContent = content;
+  if (path.endsWith('_meta.json')) {
+    const segments = path.split('/').filter(Boolean);
+    if (segments.length < 2 || segments[segments.length - 1] !== '_meta.json') {
+      throw new Error(`_meta.json must be written under a module dir, got "${path}"`);
+    }
+    const moduleName = segments[0];
+    let parsed: Record<string, unknown>;
+    try { parsed = JSON.parse(content); }
+    catch (e) { throw new Error(`_meta.json invalid JSON: ${(e as Error).message}`); }
+
+    const check = validateMetaContract(userId, moduleName, parsed);
+    if (!check.ok) {
+      throw new Error(formatContractErrors(check.errors));
+    }
+    // 用规范化后的内容(自动填充 name/basePath)写盘
+    normalizedContent = JSON.stringify(check.normalizedMeta, null, 2);
+  }
+
   // Ensure directory exists
   const dir = dirname(fullPath);
   if (!existsSync(dir)) {
@@ -142,7 +165,7 @@ export async function writeFile(userId: number, path: string, content: string): 
   }
 
   // Write file
-  writeFileSync(fullPath, content, 'utf-8');
+  writeFileSync(fullPath, normalizedContent, 'utf-8');
 
   // Auto-execute SQL files
   if (path.endsWith('.sql')) {
@@ -176,34 +199,13 @@ export async function writeFile(userId: number, path: string, content: string): 
   }
 
   // Auto-sync _meta.json to modules table.
-  // Path is authoritative for moduleName (extracted from "<moduleName>/_meta.json").
-  // AI sometimes omits the top-level `name` field — we still register correctly
-  // and rewrite the file with the derived name so subsequent reads stay consistent.
+  // 路径、JSON 解析、basePath/endpoints contract、名字全局唯一 都已在文件顶部
+  // 写盘前的预校验通过,这里 normalizedContent 是已经规范化的内容。
   if (path.endsWith('_meta.json')) {
     try {
-      // Path MUST be "<moduleName>/_meta.json". Reject bare "_meta.json".
       const segments = path.split('/').filter(Boolean);
-      if (segments.length < 2 || segments[segments.length - 1] !== '_meta.json') {
-        throw new Error(`_meta.json must be written under a module dir, got "${path}"`);
-      }
       const moduleName = segments[0];
-      if (!moduleName || moduleName === '_meta.json') {
-        throw new Error(`cannot derive moduleName from path "${path}"`);
-      }
-      let meta: Record<string, unknown>;
-      try { meta = JSON.parse(content); } catch (e) { throw new Error(`_meta.json invalid JSON: ${(e as Error).message}`); }
-
-      // Inject missing `name` so future reads (openapi-export / inspect_module / etc.)
-      // see a consistent meta object. Persist back to disk if we changed it.
-      let metaPatched = false;
-      if (meta.name !== moduleName) {
-        meta.name = moduleName;
-        metaPatched = true;
-      }
-      if (metaPatched) {
-        const repaired = JSON.stringify(meta, null, 2);
-        try { writeFileSync(fullPath, repaired, 'utf-8'); } catch { /* fs already wrote; ignore re-write fail */ }
-      }
+      const meta = JSON.parse(normalizedContent) as Record<string, unknown>;
 
       const existing = db.select().from(modules)
         .where(and(eq(modules.name, moduleName), eq(modules.userId, userId)))
@@ -214,7 +216,8 @@ export async function writeFile(userId: number, path: string, content: string): 
         const updateValues: Record<string, unknown> = {
           displayName: (meta.displayName as string) || moduleName,
           description: (meta.description as string) || '',
-          basePath: (meta.basePath as string) || `/mock/${moduleName}`,
+          basePath: `/mock/${moduleName}`,
+          updatedBy: userId,
           updatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
         };
         if (!preserveStatus) updateValues.status = (meta.status as string) || 'active';
@@ -222,10 +225,11 @@ export async function writeFile(userId: number, path: string, content: string): 
       } else {
         db.insert(modules).values({
           name: moduleName,
-          userId,
+          userId,                                     // creator
+          updatedBy: userId,                          // 第一次写入,updatedBy = creator
           displayName: (meta.displayName as string) || moduleName,
           description: (meta.description as string) || '',
-          basePath: (meta.basePath as string) || `/mock/${moduleName}`,
+          basePath: `/mock/${moduleName}`,
           status: (meta.status as string) || 'active',
         }).run();
       }

@@ -3,12 +3,27 @@ import { eq, and, desc } from 'drizzle-orm';
 import { resolve, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { db, sqlite } from '../core/database.js';
-import { modules, sessions } from '../core/schema.js';
+import { modules, sessions, users } from '../core/schema.js';
 import { authMiddleware } from '../core/auth.js';
 import { success } from '../core/response.js';
 import { deleteModule } from '../agent/tools/delete-module.js';
 import { computeModuleHealth } from '../core/module-health.js';
 import { aggregateTimeline } from '../core/timeline-aggregator.js';
+
+/**
+ * Build id → username Map in one query so list/detail responses can attach
+ * createdByUsername / updatedByUsername without N+1.
+ */
+function loadUsernameMap(ids: Array<number | null | undefined>): Map<number, string> {
+  const map = new Map<number, string>();
+  const filtered = Array.from(new Set(ids.filter((x): x is number => typeof x === 'number')));
+  if (filtered.length === 0) return map;
+  const rows = db.select({ id: users.id, username: users.username }).from(users).all();
+  for (const r of rows) {
+    if (filtered.includes(r.id)) map.set(r.id, r.username);
+  }
+  return map;
+}
 
 const GENERATED_DIR = resolve('generated');
 
@@ -37,6 +52,7 @@ export default async function moduleRoutes(app: FastifyInstance) {
       .all();
 
     const activeNames = activeSessionModuleSet(userId);
+    const usernameMap = loadUsernameMap(result.flatMap(m => [m.userId, m.updatedBy]));
 
     // Enrich with _meta.json data + health; also self-heal transient status
     // (e.g. a 'creating' row whose files are now complete → flip to 'active').
@@ -68,6 +84,8 @@ export default async function moduleRoutes(app: FastifyInstance) {
         status: effectiveStatus,
         health: report.health,
         hasActiveSession,
+        createdByUsername: m.userId ? (usernameMap.get(m.userId) ?? null) : null,
+        updatedByUsername: m.updatedBy ? (usernameMap.get(m.updatedBy) ?? null) : (m.userId ? (usernameMap.get(m.userId) ?? null) : null),
         meta,
       };
     });
@@ -101,7 +119,16 @@ export default async function moduleRoutes(app: FastifyInstance) {
       }
     }
 
-    return success({ ...mod, status: effectiveStatus, health: report.health, hasActiveSession, meta });
+    const usernameMap = loadUsernameMap([mod.userId, mod.updatedBy]);
+    return success({
+      ...mod,
+      status: effectiveStatus,
+      health: report.health,
+      hasActiveSession,
+      createdByUsername: mod.userId ? (usernameMap.get(mod.userId) ?? null) : null,
+      updatedByUsername: mod.updatedBy ? (usernameMap.get(mod.updatedBy) ?? null) : (mod.userId ? (usernameMap.get(mod.userId) ?? null) : null),
+      meta,
+    });
   });
 
   // GET /api/modules/:name/context — read _context.md

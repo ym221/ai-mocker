@@ -2,13 +2,24 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 const GUIDE_MARKDOWN = `# MockForge MCP
 
-让 Coding Agent 从自然语言或 OpenAPI 直接生成可访问的 Mock REST 服务。每个模块对外暴露一个 \`mockBaseUrl\` —— 形如 \`<MCP server origin>/mock/<basePath>\`，由 MCP 自动按下面优先级算出，**你直接用就好**：
+让 Coding Agent 从自然语言或 OpenAPI 直接生成可访问的 Mock REST 服务。
 
-1. \`env.MCP_PUBLIC_URL\` 部署明确指定（最高优先）
-2. 本次 MCP 请求 header 推断（\`X-Forwarded-Proto/Host/Port\` 或 \`Host\`）
-3. \`http://localhost:<PORT>\` 兜底（仅本地直连场景才正确）
+## 访问 URL 公式(铁律)
 
-返回结果里附 \`mockBaseUrlSource\`：\`env-public-url\` / \`request-origin\` / \`fallback-localhost\`。若是 \`fallback-localhost\` **且你不是在本机访问 MCP**，提示用户去配 \`MCP_PUBLIC_URL\` 或在反向代理加 \`X-Forwarded-*\` —— 否则你写进业务代码后部署一定挂。每个模块含 CRUD + 业务规则 + Mock 数据。
+\`\`\`
+完整访问 URL = <MCP origin>/mock/<moduleName><endpoint.path>
+\`\`\`
+
+例:\`moduleName=order\` + \`endpoint.path=/list\` → \`<MCP origin>/mock/order/list\`
+
+**默认零身份信息**:业务代码 / 代理 / curl 直接用 mockBaseUrl 拼,**不要带任何 token / userId / header**。MCP 给的 \`mockBaseUrl\` 已经是 \`<MCP origin>/mock/<moduleName>\`,你只需要拼 endpoint.path 即可。
+
+\`mockBaseUrl\` 的 origin 算法:env \`MCP_PUBLIC_URL\` > 请求 \`X-Forwarded-*\` > \`http://localhost:<PORT>\` 兜底。返回的 \`mockBaseUrlSource\` 字段告诉你来源 — 若是 \`fallback-localhost\` 但 MCP 部署在远程,提示用户配 \`MCP_PUBLIC_URL\`。
+
+## 接口 404 只有两种原因
+
+1. **URL 拼错** → 对照公式核对(模块名、endpoint.path 是否带了多余前缀)
+2. **AI 生成的代码有问题** → 框架已硬校验 _meta.json,这里 404 通常是 \`endpoints[].path\` 在 _meta 里登记的不是你想的那个;\`MODULE_NOT_FOUND\` 时响应里附 \`hint\` 列出所有可用模块名,\`ENDPOINT_NOT_MATCHED\` 时附 \`hint\` 列出该模块所有已注册 path
 
 ## 工具耗时（先看这里）
 
@@ -35,7 +46,7 @@ const GUIDE_MARKDOWN = `# MockForge MCP
 ## 13 个工具
 
 **读**
-- \`list_modules\` — 列出所有模块（name / status / health / endpoints / mockBaseUrl）
+- \`list_modules\` — 列出所有模块(name / status / health / endpoints / mockBaseUrl / createdBy / updatedBy / 时间);响应顶层含 \`currentUser: {id, username}\` 让你一眼知道"我是谁"
 - \`list_models\` — 按 provider 分组列出可用 AI 模型;每个 model 带 \`isVerified\`(测试通过)+ \`note\`(用户写的成本/速度备注)+ \`isDefault\`。**写工具调用前先看这个挑合适的 model**
 - \`inspect_module(moduleName, view?)\` — view: \`all|doc|openapi|health\`（默认 all）
 - \`get_mock_access_log(moduleName)\` — 业务代码最近打到 Mock 的真实请求/响应
@@ -82,31 +93,36 @@ const GUIDE_MARKDOWN = `# MockForge MCP
 
 ## 关键约定
 
-- \`moduleName\` 大小写敏感
-- \`mockBaseUrl\` 是完整 URL，直接用，不要再拼 \`/mock\`；**绝不要假设它是 \`localhost:3000\`** —— 用工具返回的实际值
-- 看到 \`mockBaseUrlSource === 'fallback-localhost'\` 而你的 MCP 不在用户本机：先告诉用户去配 \`MCP_PUBLIC_URL\` 再继续，否则给的 URL 在他们部署环境跑不起来
+- \`moduleName\` 大小写敏感,**全局唯一**(框架在 create_module_from_spec / write_files 写盘前硬校验冲突;冲突时报 \`MODULE_NAME_TAKEN\` 让你改名,建议加业务前缀如 \`acme_order\`)
+- \`mockBaseUrl\` 是完整 URL,直接用,不要再拼 \`/mock\` 或 \`/<moduleName>\`
+- \`endpoints[].path\` 是**模块内**子路径,以 \`/\` 开头,**不带** \`/mock/\` 也不带 \`/<moduleName>/\` 前缀(框架自动加)
 - 所有实体自动含 \`id\` / \`created_at\` / \`updated_at\`
-- 响应信封 \`{ success, message, data }\`；list 端点 data 是 \`{ list, total, page, pageSize }\`
-- 优先读 \`structuredContent\`（机读），\`content[0].text\` 是给人看的
-- \`dry_run:true\` → 只解析校验不落地，先确认再真跑
+- 响应信封 \`{ success, message, data }\`;list 端点 data 是 \`{ list, total, page, pageSize }\`
+- 优先读 \`structuredContent\`(机读),\`content[0].text\` 是给人看的
+- \`dry_run:true\` → 只解析校验不落地,先确认再真跑
 
-## 接入业务代码（必读）
+## 接入业务代码
 
-\`mockBaseUrl\` 跟业务代码原本的后端**不在同源**（host/port 不同），直接 fetch 会跨域。两种接法：
+直接用 \`mockBaseUrl\` 拼端点 path 即可,**完全无需带身份信息**:
 
-- **换 baseURL**：业务的 axios/fetch 客户端 \`baseURL\` 直接设为 \`mockBaseUrl\`（适合纯前端原型 / Node 端调用）
-- **开发代理**（推荐，业务代码零改动）：在 dev server 把业务的 \`/api/*\` 转发到 \`mockBaseUrl\`
-  - Vite：\`vite.config.ts\` 的 \`server.proxy['/api'] = { target: '<MCP host>', rewrite: p => p.replace(/^\\/api/, '/mock/<basePath>') }\`
-  - Next.js：\`next.config.js\` 的 \`rewrites\`，\`source: '/api/:path*'\` → \`destination: '<mockBaseUrl>/:path*'\`
-  - webpack devServer / CRA \`setupProxy.js\` / nginx \`proxy_pass\` 同理
+- **换 baseURL**:\`axios.create({ baseURL: mockBaseUrl })\` → 拼 endpoint.path 调
+- **vite proxy**:\`server.proxy['/api/order'] = { target: '<MCP origin>', rewrite: p => p.replace(/^\\/api\\/order/, '/mock/order') }\` — 不需要 headers,不需要 userId
+- **nginx**:\`proxy_pass <MCP origin>/mock/<moduleName>/\` 同样无需 X-* header
 
-**关键**：转发后到 MCP 的最终 URL 必须保留 \`/mock/<basePath>\` 前缀，否则 mock-router 匹配不到端点。
+跨域已开(CORS \`origin: true\`),浏览器直 fetch 也行。
 
 ## onConflict（同模块已有任务在跑时）
 
 - \`'resume'\`（默认）— attach 到在跑的，拿它的结果（\`actualInstruction\` ≠ \`yourInstruction\` 时附 \`warning\`）
 - \`'reject'\` — 返 \`MOCKFORGE_ALREADY_PROCESSING\`，你自己决定
 - \`'replace'\` — cancel 旧的再启新的
+
+## 用户身份(罕见场景才需要)
+
+mock 访问 URL **零身份信息**就工作。你只在以下情况才需要"用户"概念:
+- 看 \`list_modules\` / \`inspect_module\` 响应顶层的 \`currentUser: {id, username}\` 知道"我是谁"
+- 每个 module 的 \`createdBy\` / \`updatedBy\` 告诉你"这模块是谁建的、谁动过"
+- 框架启动检测到多个用户拥有同名模块时(历史遗留),mock-router 按 user_id 最小的那条响应,运维侧应 rename 解决,不需要你做任何事
 
 ## 错误码
 

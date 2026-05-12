@@ -166,6 +166,7 @@ export function initDatabase() {
   const modCols = sqlite.prepare("PRAGMA table_info('modules')").all() as { name: string }[];
   const modColNames = new Set(modCols.map(c => c.name));
   if (!modColNames.has('error_message')) sqlite.exec("ALTER TABLE modules ADD COLUMN error_message TEXT");
+  if (!modColNames.has('updated_by')) sqlite.exec("ALTER TABLE modules ADD COLUMN updated_by INTEGER REFERENCES users(id)");
   if (!modColNames.has('last_run_status')) sqlite.exec("ALTER TABLE modules ADD COLUMN last_run_status TEXT");
   if (!modColNames.has('last_run_error')) sqlite.exec("ALTER TABLE modules ADD COLUMN last_run_error TEXT");
 
@@ -241,6 +242,24 @@ export function initDatabase() {
            last_run_error = COALESCE(last_run_error, '服务重启中断')
        WHERE status IN ('creating','editing')`
   );
+
+  // 历史同名模块检测:转向 name 全局路由后,如果两个 user 都拥有同名模块,
+  // mock-router 会按"最早创建"返(LIMIT 1 ORDER BY id),其他不可访问。这里
+  // 启动时给出 warning,让运维知道需要手动 rename 或删除。不自动迁移(数据/
+  // 物理目录都不动)。
+  const dupes = sqlite.prepare(
+    `SELECT name, COUNT(*) as c, GROUP_CONCAT(user_id) as owners
+       FROM modules
+       GROUP BY name HAVING c > 1`,
+  ).all() as Array<{ name: string; c: number; owners: string }>;
+  if (dupes.length > 0) {
+    console.warn('[modules] 检测到同名模块多用户冲突:');
+    for (const d of dupes) {
+      console.warn(`  - name="${d.name}" 被 ${d.c} 个用户拥有 (user_id: ${d.owners})。`
+        + ' mock-router 会按 id 最小的那条响应 /mock/' + d.name + '/*,其余用户的同名模块无法通过 URL 访问。'
+        + ' 建议:rename 重复模块(generated/<userId>/<oldName>/ → <newName>/)或删除冗余。');
+    }
+  }
 }
 
 export { sqlite, db };

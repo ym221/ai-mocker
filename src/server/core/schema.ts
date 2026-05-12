@@ -115,10 +115,17 @@ export const messageEvents = sqliteTable('message_events', {
 ]);
 
 // ==================== modules ====================
+// 设计:
+// - userId 字段语义 = creator(模块创建人 id),不再用于路由识别。命名保留 userId 不
+//   重构以避免外部脚本依赖;新增 updatedBy(最后更新人 id)做审计互补。
+// - 模块名全局唯一靠 application-level 校验(create_module_from_spec / write_files
+//   写盘前查重),DB 仍保留旧 UNIQUE(name, user_id) 索引兼容历史数据。
+// - mock-router 路由按 name 全局查 → 拿到 row.userId 去找物理目录 generated/<userId>/<name>/。
 export const modules = sqliteTable('modules', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),
-  userId: integer('user_id').references(() => users.id),
+  userId: integer('user_id').references(() => users.id),     // 创建人(creator),不可变
+  updatedBy: integer('updated_by').references(() => users.id), // 最后更新人
   displayName: text('display_name').notNull(),
   description: text('description'),
   basePath: text('base_path').notNull(),

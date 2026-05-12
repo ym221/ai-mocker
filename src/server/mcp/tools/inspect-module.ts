@@ -4,11 +4,12 @@ import { join, resolve } from 'path';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../../core/database.js';
-import { modules } from '../../core/schema.js';
+import { modules, users } from '../../core/schema.js';
 import { buildOpenApi } from '../../core/openapi-export.js';
 import { computeModuleHealth } from '../../core/module-health.js';
-import { getMcpUserId } from '../context.js';
+import { getMcpUser, getMcpRequestOrigin } from '../context.js';
 import { MCP_ERROR_CODES, mcpError } from '../lib/error-codes.js';
+import { buildMockBaseUrl } from '../lib/mock-base-url.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -68,7 +69,8 @@ export function registerInspectModuleTool(server: McpServer): void {
       },
     },
     async ({ moduleName, view }) => {
-      const userId = getMcpUserId();
+      const ctx = getMcpUser();
+      const userId = ctx.userId;
       const effective: View = view ?? 'all';
 
       const mod = db.select().from(modules)
@@ -102,13 +104,35 @@ export function registerInspectModuleTool(server: McpServer): void {
         };
       }
 
+      // Audit info: who created / last updated
+      const lookupUser = (id: number | null | undefined) => {
+        if (!id) return null;
+        const u = db.select({ id: users.id, username: users.username }).from(users).where(eq(users.id, id)).get();
+        return u ?? { id, username: `#${id}` };
+      };
+      const audit = {
+        createdBy: lookupUser(mod.userId),
+        updatedBy: lookupUser(mod.updatedBy ?? mod.userId),
+        createdAt: mod.createdAt,
+        updatedAt: mod.updatedAt,
+      };
+
+      // Compose accessible mock URL for convenience
+      const built = buildMockBaseUrl({ moduleName, basePath: mod.basePath, requestOrigin: getMcpRequestOrigin() });
+
+      const payload = {
+        currentUser: { id: ctx.userId, username: ctx.username },
+        moduleName,
+        view: effective,
+        mockBaseUrl: built.url,
+        mockBaseUrlSource: built.source,
+        ...audit,
+        ...sections,
+      };
+
       return {
         content: [{ type: 'text', text: buildHumanText(moduleName, effective, sections) }],
-        structuredContent: {
-          moduleName,
-          view: effective,
-          ...sections,
-        },
+        structuredContent: payload,
       };
     },
   );

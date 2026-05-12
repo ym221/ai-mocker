@@ -3,9 +3,7 @@ import { resolve, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { pathToFileURL } from 'url';
 import { mockContext } from './base-model.js';
-import { db } from './database.js';
-import { users } from './schema.js';
-import { eq } from 'drizzle-orm';
+import { sqlite } from './database.js';
 import { recordMockAccess } from './access-log.js';
 
 const GENERATED_DIR = resolve('generated');
@@ -93,18 +91,6 @@ export default async function mockRouter(app: FastifyInstance) {
     };
     reply.raw.on('close', finalize);
 
-    // 0. Determine userId
-    const uidHeader = request.headers['x-mock-user'] as string | undefined;
-    const uidQuery = (request.query as Record<string, string>)?._uid;
-    let userId = Number(uidHeader || uidQuery);
-
-    if (!userId || isNaN(userId)) {
-      // Default to admin user (id=1)
-      const admin = db.select().from(users).where(eq(users.role, 'admin')).get();
-      userId = admin?.id || 1;
-    }
-    loggedUserId = userId;
-
     // 1. Parse URL → moduleName + subPath
     const url = (request.params as { '*': string })['*'];
     const parts = url.split('/');
@@ -116,10 +102,37 @@ export default async function mockRouter(app: FastifyInstance) {
       return reply.status(404).send({ success: false, message: 'Module name required' });
     }
 
-    // 2. Read _meta.json
+    // 2. Resolve user_id by name (全局路由 — 不再依赖 x-mock-user / ?_uid)
+    //    模块名全局唯一靠 application-level 校验(write-files 写盘前查重);
+    //    历史同名记录按 id 最小的那条响应,启动 init 已 console.warn 提示运维处理。
+    const moduleRow = sqlite.prepare(
+      `SELECT id, user_id FROM modules WHERE name = ? ORDER BY id ASC LIMIT 1`
+    ).get(moduleName) as { id: number; user_id: number } | undefined;
+
+    if (!moduleRow) {
+      // 列出所有模块名作为 hint,AI Agent / 用户能直接看到拼错或漏建
+      const allNames = sqlite.prepare(
+        `SELECT DISTINCT name FROM modules ORDER BY name LIMIT 20`
+      ).all() as Array<{ name: string }>;
+      return reply.status(404).send({
+        success: false,
+        code: 'MODULE_NOT_FOUND',
+        message: `Module "${moduleName}" not found`,
+        hint: allNames.length > 0
+          ? `Available modules: ${allNames.map(r => r.name).join(', ')}`
+          : 'No modules exist yet. Create one via the Web UI or MCP create_module_from_spec.',
+      });
+    }
+    const userId = moduleRow.user_id;
+    loggedUserId = userId;
+
     const metaPath = join(GENERATED_DIR, String(userId), moduleName, '_meta.json');
     if (!existsSync(metaPath)) {
-      return reply.status(404).send({ success: false, message: `Module "${moduleName}" not found` });
+      return reply.status(500).send({
+        success: false,
+        code: 'MODULE_FILES_MISSING',
+        message: `Module "${moduleName}" exists in DB (user_id=${userId}) but _meta.json is missing on disk. The module was likely deleted or never finished creation.`,
+      });
     }
 
     let meta: ModuleMeta;
@@ -162,7 +175,16 @@ export default async function mockRouter(app: FastifyInstance) {
     }
 
     if (!matchedEndpoint) {
-      return reply.status(404).send({ success: false, message: `No endpoint matches ${method} /mock/${moduleName}${subPath}` });
+      // 列出该模块所有已注册端点,让 AI Agent / 用户一眼看出是 path 拼错还是 method 拼错
+      const registered = (meta.endpoints || []).map(ep => `${ep.method.toUpperCase()} ${ep.path}`);
+      return reply.status(404).send({
+        success: false,
+        code: 'ENDPOINT_NOT_MATCHED',
+        message: `No endpoint matches ${method} /mock/${moduleName}${subPath}`,
+        hint: registered.length > 0
+          ? `Module "${moduleName}" has these endpoints (relative paths, prepended with /mock/${moduleName}): ${registered.join('; ')}`
+          : `Module "${moduleName}" has no endpoints registered in _meta.json — check the generation result.`,
+      });
     }
 
     // 4. Apply delay & error simulation

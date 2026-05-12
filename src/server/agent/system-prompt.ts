@@ -176,7 +176,14 @@ controller 里 \`new BaseModel(table).withMeta(moduleName)\` 自动接管所有 
    - \`updated_at TEXT DEFAULT CURRENT_TIMESTAMP\` (BaseModel.update 自动写 updated_at,缺列运行时报错)
 2.1 **任何 NOT NULL 的时间戳列必须有 DEFAULT**(无论命名 \`created_at\` 还是 \`createdAt\`):写 \`createdAt TEXT NOT NULL\` 而**不带** \`DEFAULT\` 会触发 INSERT 时 NOT NULL constraint failed —— 必须改成 \`createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP\` 或 \`createdAt TEXT NOT NULL DEFAULT (datetime('now'))\`。优先用框架默认的 snake_case \`created_at\`/\`updated_at\` —— 用 camelCase 一定要在 schema.sql 里加 DEFAULT,否则只能在 controller.create 里显式 \`createdAt: new Date().toISOString()\`。
 3. **_meta.json 实体入口唯一**:所有实体写进 \`entities: [...]\` 数组。**禁用**顶层 \`entity\` 字段(老格式,框架已移除此路径)。\`entities[i].tableName === "mock__" + entities[i].name\`;\`schema.sql\` 的 CREATE TABLE 表名 === entity.tableName(系统自动注入 userId 前缀)
-4. **endpoints.type** 必须是 list/detail/create/update/delete/custom 之一;\`path\` 不加模块名前缀
+4. **URL 公式 + endpoints.path 铁律**:
+   - 完整访问 URL = \`<MCP origin>/mock/<moduleName><endpoint.path>\`(框架自动加 \`/mock/<moduleName>\` 前缀)
+   - **不要**在 \`_meta.json\` 写 \`basePath\`(框架自动设为 \`/mock/<moduleName>\`);若写,值**必须**等于 \`/mock/<moduleName>\`
+   - \`endpoints[].path\` 是**模块内**相对路径,\`/\` 开头;**禁止**带 \`/mock/\` 前缀;**禁止**带 \`/<moduleName>/\` 前缀
+   - 从 OpenAPI/PRD 接到 path 如 \`/reconcile/order/search\` 时,把公共前缀 \`reconcile\` 当作 moduleName,只把 \`/search\`(剩余部分)写进 \`endpoints[].path\`
+   - **endpoints.type** 必须是 list/detail/create/update/delete/custom 之一
+   - **写盘前框架硬校验** basePath / endpoints[].path,不合规直接 reject,你必须按报错修正后重试
+   - **模块名全局唯一**:与其他用户已有的模块同名时,框架 reject 并要求改名(加业务前缀如 \`acme_order\`)
 5. **controller 导出(单实体)**:命名导出 \`list/getById/create/update/remove\`,不可 default export
 6. **controller 导出(多实体,≥2 entities)**:每条 endpoint 在 \`_meta.endpoints[].controller\` 填具名 handler(如 \`listItems\`/\`getWarehouseById\`);controller.ts 导出同名函数,签名 \`async (req) => {...}\`,其中 \`req = { body, query, params }\`。示例:
    \`\`\`

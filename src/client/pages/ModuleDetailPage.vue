@@ -25,10 +25,23 @@ const docContent = ref('');
 const md = new MarkdownIt({ html: false, breaks: true, linkify: true });
 const renderedDoc = computed(() => docContent.value ? md.render(docContent.value) : '');
 
+// page-header 的 meta 行展示模块的 basePath + 创建/更新审计,让用户随手看见"谁的、什么时候动过"
+function formatAuditLine(m: any): string {
+  if (!m) return '';
+  const parts: string[] = [];
+  if (m.basePath) parts.push(m.basePath);
+  const createdBy = m.createdByUsername || (m.userId ? `#${m.userId}` : null);
+  const updatedBy = m.updatedByUsername || (m.updatedBy ? `#${m.updatedBy}` : createdBy);
+  if (createdBy) parts.push(`创建人 ${createdBy}`);
+  if (updatedBy && updatedBy !== createdBy) parts.push(`最后更新 ${updatedBy}`);
+  if (m.updatedAt) parts.push(`更新于 ${m.updatedAt}`);
+  return parts.join(' · ');
+}
+
 usePageHeader(() => ({
   title: moduleData.value?.displayName || moduleName.value || '模块详情',
   description: moduleData.value?.description || '',
-  meta: moduleData.value?.basePath || '',
+  meta: formatAuditLine(moduleData.value),
   back: '/modules',
 }));
 
@@ -48,6 +61,21 @@ async function quickTest(method: string, path: string) {
     testResult.value = { url, method, status: res.status, body };
   } catch (err) {
     toast.error('请求失败');
+  }
+}
+
+// 完整可复制访问 URL — 当前页面 origin + /mock/<moduleName> + endpoint.path。
+// 业务代码 / curl 直接用这个 URL,零身份信息(框架按 moduleName 全局路由)。
+const pageOrigin = computed(() => (typeof window !== 'undefined' ? window.location.origin : ''));
+function buildFullUrl(path: string): string {
+  return `${pageOrigin.value}/mock/${moduleName.value}${path}`;
+}
+async function copyUrl(url: string) {
+  try {
+    await navigator.clipboard.writeText(url);
+    toast.success('已复制 URL');
+  } catch {
+    toast.error('复制失败');
   }
 }
 
@@ -300,15 +328,23 @@ async function regenerateModule() {
 
       <!-- Endpoints Tab -->
       <div v-if="activeTab === 'endpoints'" class="max-w-6xl">
+        <!-- 访问 URL 提示横条 — 复制即用 -->
+        <div class="mb-4 p-3 rounded-md bg-muted/40 border border-border text-xs text-muted-foreground">
+          <div class="font-medium text-foreground mb-1">访问 URL 公式</div>
+          <div class="font-mono">
+            <span class="text-primary">{{ pageOrigin }}/mock/{{ moduleName }}</span><span>&lt;endpoint.path&gt;</span>
+          </div>
+          <div class="mt-1.5">业务代码 / curl / 代理都直接用,不需要带任何 token / userId / header。</div>
+        </div>
         <div class="space-y-3">
           <div
             v-for="ep in moduleData.meta?.endpoints || []"
             :key="ep.method + ep.path"
-            class="border border-border rounded-lg p-4 flex items-center justify-between"
+            class="border border-border rounded-lg p-4 flex items-center justify-between gap-3"
           >
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
               <span
-                class="text-xs font-mono font-bold px-2 py-0.5 rounded"
+                class="text-xs font-mono font-bold px-2 py-0.5 rounded flex-shrink-0"
                 :class="{
                   'bg-green-100 text-green-700': ep.method === 'GET',
                   'bg-blue-100 text-blue-700': ep.method === 'POST',
@@ -318,17 +354,27 @@ async function regenerateModule() {
               >
                 {{ ep.method }}
               </span>
-              <span class="font-mono text-sm">{{ moduleData.basePath }}{{ ep.path }}</span>
-              <span class="text-sm text-muted-foreground">{{ ep.name }}</span>
+              <span class="font-mono text-sm truncate" :title="buildFullUrl(ep.path)">{{ pageOrigin }}/mock/{{ moduleName }}{{ ep.path }}</span>
+              <span class="text-sm text-muted-foreground truncate hidden md:inline">{{ ep.name }}</span>
             </div>
-            <Button
-              v-if="ep.method === 'GET'"
-              size="sm"
-              variant="outline"
-              @click="quickTest(ep.method, ep.path === '/:id' ? '/1' : ep.path)"
-            >
-              <Play class="w-3 h-3 mr-1" /> 测试
-            </Button>
+            <div class="flex items-center gap-2 flex-shrink-0">
+              <Button
+                size="sm"
+                variant="outline"
+                @click="copyUrl(buildFullUrl(ep.path))"
+                title="复制完整 URL"
+              >
+                复制
+              </Button>
+              <Button
+                v-if="ep.method === 'GET'"
+                size="sm"
+                variant="outline"
+                @click="quickTest(ep.method, ep.path === '/:id' ? '/1' : ep.path)"
+              >
+                <Play class="w-3 h-3 mr-1" /> 测试
+              </Button>
+            </div>
           </div>
         </div>
 

@@ -14,6 +14,10 @@ interface Module {
   lastRunError?: string | null;
   health?: 'healthy' | 'degraded' | 'missing';
   hasActiveSession?: boolean;
+  userId?: number | null;          // creator id
+  updatedBy?: number | null;       // 最后更新人 id
+  createdByUsername?: string | null;
+  updatedByUsername?: string | null;
   createdAt: string;
   updatedAt: string;
   meta: any;

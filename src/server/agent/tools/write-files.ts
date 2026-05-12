@@ -27,6 +27,7 @@ import { dirname, join, resolve } from 'path';
 import { sqlite, db } from '../../core/database.js';
 import { modules } from '../../core/schema.js';
 import { eq, and } from 'drizzle-orm';
+import { validateMetaContract, formatContractErrors } from './meta-contract.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -183,6 +184,49 @@ export async function writeFiles(userId: number, input: WriteFilesInput): Promis
     }
   }
 
+  // 1.5. Pre-validate _meta.json contracts: basePath / endpoints[].path / 全局名字唯一。
+  // 在写盘**之前**做硬校验,任一 _meta.json 不合规 → 拒绝整个 batch,绝不让坏模块落盘。
+  // 同时把规范化后的 _meta.json content 写回 prepared[i].content,后续写盘和 sync
+  // 都用这份"自洽"的内容。
+  for (let i = 0; i < prepared.length; i++) {
+    const p = prepared[i];
+    if (!p.path.endsWith('_meta.json')) continue;
+    const segments = p.path.split('/').filter(Boolean);
+    if (segments.length < 2 || segments[segments.length - 1] !== '_meta.json') {
+      return {
+        success: false,
+        message: `_meta.json must be written under a module dir (got "${p.path}")`,
+        filesWritten: 0,
+        perFile: input.files.map(x => ({ path: x.path, ok: false, note: 'batch aborted' })),
+        error: 'invalid _meta.json path',
+      };
+    }
+    const moduleName = segments[0];
+    let parsed: Record<string, unknown>;
+    try { parsed = JSON.parse(p.content); } catch (e) {
+      return {
+        success: false,
+        message: `_meta.json invalid JSON in "${p.path}": ${(e as Error).message}`,
+        filesWritten: 0,
+        perFile: input.files.map(x => ({ path: x.path, ok: false, note: 'batch aborted' })),
+        error: 'invalid JSON',
+      };
+    }
+    const check = validateMetaContract(userId, moduleName, parsed);
+    if (!check.ok) {
+      const msg = formatContractErrors(check.errors);
+      return {
+        success: false,
+        message: msg,
+        filesWritten: 0,
+        perFile: input.files.map(x => ({ path: x.path, ok: false, note: 'meta-contract failed' })),
+        error: msg,
+      };
+    }
+    // 用规范化后的 content 覆盖,后续写盘就是自洽的
+    prepared[i] = { ...p, content: JSON.stringify(check.normalizedMeta, null, 2) };
+  }
+
   // 2. Write all files to disk
   const writtenIndices: number[] = [];
   try {
@@ -229,23 +273,11 @@ export async function writeFiles(userId: number, input: WriteFilesInput): Promis
           }
         } else if (p.path.endsWith('_meta.json')) {
           try {
-            // Path MUST be "<moduleName>/_meta.json"; reject bare "_meta.json".
+            // 路径合法性、basePath/endpoints contract、JSON 解析、名字全局唯一 都已在
+            // 第 1.5 步预校验通过,这里 content 已经是规范化后的内容(name + basePath 自洽)。
             const segments = p.path.split('/').filter(Boolean);
-            if (segments.length < 2 || segments[segments.length - 1] !== '_meta.json') {
-              throw new Error(`_meta.json must be written under a module dir, got "${p.path}"`);
-            }
             const moduleName = segments[0];
-            if (!moduleName || moduleName === '_meta.json') {
-              throw new Error(`cannot derive moduleName from path "${p.path}"`);
-            }
-            let meta: Record<string, unknown>;
-            try { meta = JSON.parse(p.content); } catch (e) { throw new Error(`_meta.json invalid JSON: ${(e as Error).message}`); }
-
-            if (meta.name !== moduleName) {
-              meta.name = moduleName;
-              const repaired = JSON.stringify(meta, null, 2);
-              try { writeFileSync(p.fullPath, repaired, 'utf-8'); } catch { /* ignore re-write fail */ }
-            }
+            const meta = JSON.parse(p.content) as Record<string, unknown>;
 
             const existing = db.select().from(modules)
               .where(and(eq(modules.name, moduleName), eq(modules.userId, userId)))
@@ -255,7 +287,8 @@ export async function writeFiles(userId: number, input: WriteFilesInput): Promis
               const updateValues: Record<string, unknown> = {
                 displayName: (meta.displayName as string) || moduleName,
                 description: (meta.description as string) || '',
-                basePath: (meta.basePath as string) || `/mock/${moduleName}`,
+                basePath: `/mock/${moduleName}`,           // 强制规范化
+                updatedBy: userId,                          // 谁动过模块就是 updatedBy
                 updatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
               };
               if (!preserveStatus) updateValues.status = (meta.status as string) || 'active';
@@ -263,10 +296,11 @@ export async function writeFiles(userId: number, input: WriteFilesInput): Promis
             } else {
               db.insert(modules).values({
                 name: moduleName,
-                userId,
+                userId,                                     // creator
+                updatedBy: userId,                          // 第一次写入,updatedBy = creator
                 displayName: (meta.displayName as string) || moduleName,
                 description: (meta.description as string) || '',
-                basePath: (meta.basePath as string) || `/mock/${moduleName}`,
+                basePath: `/mock/${moduleName}`,
                 status: (meta.status as string) || 'active',
               }).run();
             }

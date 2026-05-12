@@ -1,23 +1,22 @@
 // =============================================================================
-// 关键!必须在任何动态 .ts 加载之前注册 tsx ESM hook —— 这是 production Docker
-// 能加载 AI 动态生成的 controller.ts / test.ts 的前提。
+// production Docker 下注册 tsx ESM hook,让运行时能动态 import('xxx.ts')。
+// (AI 生成的 controller.ts / test.ts 是 runtime 产物,不参与 build 编译)。
 //
-// 背景:
-// - dev 模式用 `tsx watch src/server/server.ts` 启动,tsx 已经接管 .ts 解析
-// - production 模式 `node dist/server/server.js` 直接跑编译产物,**原生 Node
-//   不识别 .ts 后缀**。mock-router 用 `import(controller.ts)` 加载 AI 生成的
-//   动态文件 → ERR_UNKNOWN_FILE_EXTENSION → run_test 必败,用户操作不能完成。
+// 仅 production 才主动注册 — dev 模式 tsx CLI / tsx watch 自己已经接管 .ts
+// 解析,重复 register() 会让 ESM hook chain 出现冲突,业务 import 卡死。
 //
-// 解决方案:启动时通过 tsx/esm/api 注册一个 ESM hook,后续所有 `import('*.ts')`
-// 都被 tsx 转换执行。register() 必须在所有动态 .ts import 之前,且要早于
-// chat-runner / mock-router 等业务模块的 import(它们内部不再做 register)。
-//
-// 注意:静态 import 失败 = 进程直接退出,这是有意为之 — 缺 tsx 的 production
-// 部署不应该静默继续,让 Docker 容器 fail-fast,日志清晰可见。
+// 检测条件:NODE_ENV=production 且当前进程入口是 .js(说明跑的是 dist 编译产物)。
+// 任一不满足就跳过注册,假定运行环境已能处理 .ts。
 // =============================================================================
-import { register as registerTsxHook } from 'tsx/esm/api';
-registerTsxHook();
-console.log('[bootstrap] tsx ESM hook registered — runtime .ts imports enabled');
+const entry = process.argv[1] || '';
+const needsTsxHook = process.env.NODE_ENV === 'production' && entry.endsWith('.js');
+if (needsTsxHook) {
+  const { register: registerTsxHook } = await import('tsx/esm/api');
+  registerTsxHook();
+  console.log('[bootstrap] tsx ESM hook registered — runtime .ts imports enabled');
+} else {
+  console.log('[bootstrap] skipping tsx hook (dev / tsx CLI already manages .ts)');
+}
 
 // =============================================================================
 // Process-level 兜底:防止某些路径下未 catch 的异常或 promise rejection 直接退出进程,

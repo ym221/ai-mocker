@@ -212,10 +212,16 @@ export function initDatabase() {
     const lastAssistant = sqlite.prepare(
       `SELECT id FROM messages WHERE session_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1`
     ).get(s.id) as { id: number } | undefined;
+    // finishedAt 让前端能算"耗时 X 秒/分",与正常 done/error 终态事件保持一致
     sqlite.prepare(
       `INSERT INTO message_events (session_id, message_id, seq, type, payload)
        VALUES (?, ?, ?, 'aborted', ?)`
-    ).run(s.id, lastAssistant?.id ?? null, nextSeq, JSON.stringify({ reason: 'server_restart' }));
+    ).run(
+      s.id,
+      lastAssistant?.id ?? null,
+      nextSeq,
+      JSON.stringify({ reason: 'server_restart', finishedAt: Date.now() }),
+    );
     if (lastAssistant) {
       sqlite.prepare(
         `UPDATE messages SET finalized_at = datetime('now') WHERE id = ? AND finalized_at IS NULL`

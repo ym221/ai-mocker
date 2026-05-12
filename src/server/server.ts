@@ -1,3 +1,37 @@
+// =============================================================================
+// 关键!必须在任何动态 .ts 加载之前注册 tsx ESM hook —— 这是 production Docker
+// 能加载 AI 动态生成的 controller.ts / test.ts 的前提。
+//
+// 背景:
+// - dev 模式用 `tsx watch src/server/server.ts` 启动,tsx 已经接管 .ts 解析
+// - production 模式 `node dist/server/server.js` 直接跑编译产物,**原生 Node
+//   不识别 .ts 后缀**。mock-router 用 `import(controller.ts)` 加载 AI 生成的
+//   动态文件 → ERR_UNKNOWN_FILE_EXTENSION → run_test 必败,用户操作不能完成。
+//
+// 解决方案:启动时通过 tsx/esm/api 注册一个 ESM hook,后续所有 `import('*.ts')`
+// 都被 tsx 转换执行。register() 必须在所有动态 .ts import 之前,且要早于
+// chat-runner / mock-router 等业务模块的 import(它们内部不再做 register)。
+//
+// 注意:静态 import 失败 = 进程直接退出,这是有意为之 — 缺 tsx 的 production
+// 部署不应该静默继续,让 Docker 容器 fail-fast,日志清晰可见。
+// =============================================================================
+import { register as registerTsxHook } from 'tsx/esm/api';
+registerTsxHook();
+console.log('[bootstrap] tsx ESM hook registered — runtime .ts imports enabled');
+
+// =============================================================================
+// Process-level 兜底:防止某些路径下未 catch 的异常或 promise rejection 直接退出进程,
+// 导致 Docker 反复 restart + 所有 running session 被自动写 server_restart 中断。
+// 关键:Node 20 默认 `--unhandled-rejections=throw`,unhandledRejection 会被升级
+// 成 uncaughtException 进而 crash。这里覆盖默认行为,记录后让进程继续。
+// =============================================================================
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException] 未捕获的同步异常 — 进程继续运行,但应排查根因:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection] 未处理的 promise rejection — 进程继续运行,但应排查根因:', reason);
+});
+
 // Setup HTTP proxy for AI API calls (needed in China for Google/OpenAI)
 import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { existsSync } from 'fs';

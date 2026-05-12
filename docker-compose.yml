@@ -35,6 +35,16 @@ services:
       - HTTP_PROXY=${HTTP_PROXY:-}
       - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
     restart: unless-stopped
+    # ----------------------------------------------------------------
+    # 资源限制(可选):AI 长任务 + 多模块生成累计可能吃到 800MB+。
+    # 服务器内存吃紧时若没设限,容器被宿主机 OOM killer 杀掉 → 自动重启 →
+    # 前端所有正在跑的对话显示"服务已重启,生成被中断"。
+    # 若频繁看到这个提示,在 .env 加 MOCKFORGE_MEM_LIMIT=2g 并取消下面注释。
+    # ----------------------------------------------------------------
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: ${MOCKFORGE_MEM_LIMIT:-2g}
 
 volumes:
   mockforge-data:

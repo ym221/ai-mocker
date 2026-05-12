@@ -638,12 +638,28 @@ export class ChatRunner {
     // 5. Kick off AI (or fake) in background
     // Test sentinels use includes() (not startsWith) so they survive MCP-tool
     // userContent wrapping like "请根据以下 API 规范/需求...规范内容：__fake_slow__".
+    //
+    // 注意:这里是 fire-and-forget,内部 runAIGeneration 已有顶层 try/catch,
+    // 但万一某条路径的 catch 内**再次抛错**(如 finalize 自己出 FK 错),没了兜底就会
+    // 变成 unhandledRejection → docker 进程 crash 重启,触发"服务已重启"假象。
+    // .catch() 兜底确保任何泄漏的 reject 都被记录、不冒到 process。
     const u = opts.userContent || '';
-    if (process.env.FAKE_AI === '1' || u.includes('__fake__') || u.includes('__fake_slow__')) {
-      void this.runFakeGeneration();
-    } else {
-      void this.runAIGeneration(opts.userId, session);
-    }
+    const bg = (process.env.FAKE_AI === '1' || u.includes('__fake__') || u.includes('__fake_slow__'))
+      ? this.runFakeGeneration()
+      : this.runAIGeneration(opts.userId, session);
+    bg.catch((err) => {
+      console.error(
+        `[chat-runner] background generation rejected uncaught (session=${this.sessionId}):`,
+        err instanceof Error ? err.stack || err.message : err,
+      );
+      // 尽力 finalize 为 error,避免会话永远悬挂在 running
+      try {
+        this.finalize('error', {
+          message:
+            '生成过程出现未预期的内部错误,会话已自动终止。请重试;若反复出现请把容器日志发给我们。',
+        });
+      } catch { /* ignore — runner may already be disposed */ }
+    });
 
     return {
       userMessageId: userMsg.id,

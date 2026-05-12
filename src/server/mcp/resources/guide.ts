@@ -2,7 +2,13 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 const GUIDE_MARKDOWN = `# MockForge MCP
 
-让 Coding Agent 从自然语言或 OpenAPI 直接生成可访问的 Mock REST 服务。每个模块对外暴露一个 \`mockBaseUrl\` —— 形如 \`<当前 MCP server 部署地址>/mock/<basePath>\`（例：你连的 MCP 是 \`http://localhost:3000\` 时，order 模块的 \`mockBaseUrl\` 就是 \`http://localhost:3000/mock/order\`）。每个模块含 CRUD + 业务规则 + Mock 数据。
+让 Coding Agent 从自然语言或 OpenAPI 直接生成可访问的 Mock REST 服务。每个模块对外暴露一个 \`mockBaseUrl\` —— 形如 \`<MCP server origin>/mock/<basePath>\`，由 MCP 自动按下面优先级算出，**你直接用就好**：
+
+1. \`env.MCP_PUBLIC_URL\` 部署明确指定（最高优先）
+2. 本次 MCP 请求 header 推断（\`X-Forwarded-Proto/Host/Port\` 或 \`Host\`）
+3. \`http://localhost:<PORT>\` 兜底（仅本地直连场景才正确）
+
+返回结果里附 \`mockBaseUrlSource\`：\`env-public-url\` / \`request-origin\` / \`fallback-localhost\`。若是 \`fallback-localhost\` **且你不是在本机访问 MCP**，提示用户去配 \`MCP_PUBLIC_URL\` 或在反向代理加 \`X-Forwarded-*\` —— 否则你写进业务代码后部署一定挂。每个模块含 CRUD + 业务规则 + Mock 数据。
 
 ## 工具耗时（先看这里）
 
@@ -77,7 +83,8 @@ const GUIDE_MARKDOWN = `# MockForge MCP
 ## 关键约定
 
 - \`moduleName\` 大小写敏感
-- \`mockBaseUrl\` 是完整 URL，直接用，不要再拼 \`/mock\`
+- \`mockBaseUrl\` 是完整 URL，直接用，不要再拼 \`/mock\`；**绝不要假设它是 \`localhost:3000\`** —— 用工具返回的实际值
+- 看到 \`mockBaseUrlSource === 'fallback-localhost'\` 而你的 MCP 不在用户本机：先告诉用户去配 \`MCP_PUBLIC_URL\` 再继续，否则给的 URL 在他们部署环境跑不起来
 - 所有实体自动含 \`id\` / \`created_at\` / \`updated_at\`
 - 响应信封 \`{ success, message, data }\`；list 端点 data 是 \`{ list, total, page, pageSize }\`
 - 优先读 \`structuredContent\`（机读），\`content[0].text\` 是给人看的

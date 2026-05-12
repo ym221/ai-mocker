@@ -6,13 +6,14 @@ import { parse as parseYaml } from 'yaml';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../../core/database.js';
 import { modules } from '../../core/schema.js';
-import { getMcpUser } from '../context.js';
+import { getMcpUser, getMcpRequestOrigin } from '../context.js';
 import { summarizeEndpoints } from '../../core/openapi-export.js';
 import { bumpRetryCounter } from '../lib/retry-counter.js';
 import { buildCreateUserContent, extractCreateSpec } from '../lib/instruction-utils.js';
 import { MCP_ERROR_CODES, mcpError } from '../lib/error-codes.js';
 import { runWriteTool } from '../lib/write-tool-runner.js';
 import { humanizeStage } from '../lib/stage-humanize.js';
+import { buildMockBaseUrl } from '../lib/mock-base-url.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -174,19 +175,23 @@ export function registerCreateModuleFromSpecTool(server: McpServer): void {
             .get();
           const endpoints = summarizeEndpoints(user.userId, actualModuleName);
           const apiDoc = readModuleApiDocHead(user.userId, actualModuleName);
-          const port = process.env.PORT || '3000';
-          const host = process.env.MCP_PUBLIC_HOST || 'localhost';
-          const basePath = mod?.basePath || `/mock/${actualModuleName}`;
-          const mockBaseUrl = basePath.startsWith('/mock')
-            ? `http://${host}:${port}${basePath}`
-            : `http://${host}:${port}/mock${basePath.startsWith('/') ? basePath : '/' + basePath}`;
+          const built = buildMockBaseUrl({
+            moduleName: actualModuleName,
+            basePath: mod?.basePath,
+            requestOrigin: getMcpRequestOrigin(),
+          });
+          const mockBaseUrl = built.url;
+          const mockBaseUrlSource = built.source;
+          const mockBaseUrlHint = mockBaseUrlSource === 'fallback-localhost'
+            ? 'mockBaseUrl 用 localhost 兜底,若 MCP 部署在远程主机,请管理员配 env MCP_PUBLIC_URL 或反向代理加 X-Forwarded-Proto/Host/Port,否则把这个 URL 写入业务代码后部署会失败。'
+            : undefined;
 
           const warnings = bumpRetryCounter(`${user.userId}:${actualModuleName}:create`);
 
           return {
             content: [{
               type: 'text',
-              text: `Created module "${actualModuleName}". Proxy business code to ${mockBaseUrl}.${attached ? ` (attached to running session ${result.sessionId})` : ''}${driftWarning ? `\n\nWARNING: ${driftWarning}` : ''}`,
+              text: `Created module "${actualModuleName}". Proxy business code to ${mockBaseUrl}.${attached ? ` (attached to running session ${result.sessionId})` : ''}${driftWarning ? `\n\nWARNING: ${driftWarning}` : ''}${mockBaseUrlHint ? `\n\nNOTE: ${mockBaseUrlHint}` : ''}`,
             }],
             structuredContent: {
               moduleName: actualModuleName,
@@ -196,6 +201,8 @@ export function registerCreateModuleFromSpecTool(server: McpServer): void {
               endpoints,
               apiDocPreview: apiDoc,
               mockBaseUrl,
+              mockBaseUrlSource,
+              ...(mockBaseUrlHint ? { mockBaseUrlHint } : {}),
               warnings,
               ...(attached && actualInstruction != null ? { actualInstruction } : {}),
               ...(attached ? { yourInstruction: spec } : {}),

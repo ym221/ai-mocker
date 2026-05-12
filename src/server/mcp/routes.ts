@@ -3,6 +3,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createMcpServer } from './server.js';
 import { authenticateMcpRequest } from './auth.js';
 import { mcpUserContext } from './context.js';
+import { inferRequestOrigin } from './lib/mock-base-url.js';
 
 /**
  * Fastify 插件：把 MCP Streamable HTTP transport 挂到 /mcp。
@@ -40,8 +41,11 @@ export default async function mcpRoutes(app: FastifyInstance) {
     try {
       await server.connect(transport);
       // 3) 在 userContext 内处理请求
+      // 推断 AI Agent 看到的 MCP origin —— 让 list_modules / create_module 返的
+      // mockBaseUrl 跟它访问 MCP 时的 host/port/scheme 一致,而不是容器内的 localhost:PORT。
+      const requestOrigin = inferRequestOrigin(request.headers as Record<string, string | string[] | undefined>);
       await mcpUserContext.run(
-        { userId: user.id, username: user.username },
+        { userId: user.id, username: user.username, requestOrigin },
         async () => {
           await transport.handleRequest(request.raw, reply.raw, (request as any).body);
         }

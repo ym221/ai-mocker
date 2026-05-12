@@ -28,6 +28,13 @@ services:
       - DEFAULT_AI_API_KEY=${DEFAULT_AI_API_KEY:-}
       # MCP API Key HMAC 密钥(MCP 鉴权用)
       - MCP_API_KEY_SECRET=${MCP_API_KEY_SECRET:-}
+      # MCP 对外公开 URL(强烈建议设;影响 list_modules / create_module 返回的 mockBaseUrl)
+      # 不设时:从 X-Forwarded-Proto/Host/Port 或 Host header 推断;
+      # 都没有再 fall back 到 http://localhost:<PORT>(远程部署下 AI 拿到这个 URL 写进
+      # 业务代码后访问必然失败 — 因为 localhost 在 AI Agent 那边指的是它自己,不是 MockForge)
+      # 直连容器宿主机:MCP_PUBLIC_URL=http://<服务器外网IP>:${HOST_PORT:-9020}
+      # 反代域名:    MCP_PUBLIC_URL=https://mockforge.example.com
+      - MCP_PUBLIC_URL=${MCP_PUBLIC_URL:-}
       # 单次 chat 生成的硬超时(毫秒);默认 20 分钟。reasoning model 如 v4-pro/o1 建议 1800000(30 分钟)
       - CHAT_RUN_TIMEOUT_MS=${CHAT_RUN_TIMEOUT_MS:-}
       # 出境代理(可选;不设则不走代理)

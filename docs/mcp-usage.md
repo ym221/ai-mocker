@@ -64,6 +64,25 @@ MCP 服务与 Web UI **跑在同一进程**，共享同一份 SQLite。IDE AI �
 
 把 URL 换成你的服务器地址。每个团队成员生成自己的 Key，互不影响。
 
+### ⚠ mockBaseUrl 的正确性（远程/Docker 部署必读）
+
+`list_modules` 和 `create_module_from_spec` 返回的 `mockBaseUrl` 决定了 AI 把哪个 URL 写进你的业务代码。MCP 用三级优先级算它：
+
+1. **`MCP_PUBLIC_URL` env**（最高优先 — 部署明确指定）
+2. **请求头推断** — `X-Forwarded-Proto/Host/Port` 或 `Host`
+3. **`http://localhost:<PORT>` 兜底** — 仅本机直连 MCP 时正确
+
+返回 payload 含 `mockBaseUrlSource` 字段（`env-public-url` / `request-origin` / `fallback-localhost`），AI 看到 `fallback-localhost` 而又不是本机连接时会主动提示你检查配置。
+
+**Docker 部署强烈建议**在 `.env` 里设：
+```bash
+MCP_PUBLIC_URL=http://<服务器外网IP>:<HOST_PORT>   # 直连容器
+# 或
+MCP_PUBLIC_URL=https://mockforge.example.com       # 反代域名
+```
+
+**反向代理用户**：确保 nginx / traefik 转发 `X-Forwarded-Proto` `X-Forwarded-Host` `X-Forwarded-Port`，MCP 会自动用它们；不愿意改反代就直接设 `MCP_PUBLIC_URL` 覆盖。
+
 ---
 
 ## 4. 工具全集（v2）

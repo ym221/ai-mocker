@@ -11,7 +11,9 @@
 
 import { existsSync, readFileSync } from 'fs';
 import { resolve, join } from 'path';
+import { pathToFileURL } from 'url';
 import { sqlite } from './database.js';
+import { mockContext } from './base-model.js';
 import { getPrimaryEntity } from './meta-schema.js';
 
 const GENERATED_DIR = resolve('generated');
@@ -26,6 +28,10 @@ export interface HealthReport {
   metaValid: boolean;
   hasTable: boolean;
   tableName: string | null;
+  /** controller.ts 能否被 runtime 动态 import(true = 没 import 错误)。可选,只在 probeController() 走过才填。 */
+  controllerLoadable?: boolean;
+  /** controllerLoadable=false 时的错误信息(用来给 AI 看修复建议)。 */
+  controllerLoadError?: string;
 }
 
 export function computeModuleHealth(userId: number, moduleName: string): HealthReport {
@@ -67,4 +73,32 @@ export function computeModuleHealth(userId: number, moduleName: string): HealthR
   }
 
   return { health, missing, metaValid, hasTable, tableName };
+}
+
+/**
+ * 真实"加载 controller.ts"探针 — 比 computeModuleHealth 更严格,等同于 mock-router
+ * 收到请求时实际 import 一次,捕获 alias 解析失败 / 语法错误 / 顶层 throw 等。
+ *
+ * 关键场景:production Docker 早期没复制 tsconfig.json,AI 生成的 controller.ts 用
+ * `import from '@core/base-model.js'` alias 无法解析 → mock 请求 500 "Cannot find
+ * module '/app/core/base-model.js'"。但 computeModuleHealth 只看文件存在不真实 import,
+ * 漏报。这个 probe 在 chat-runner finalize 前调一次,真正确保模块"可访问"才放 done。
+ *
+ * 注:cache busting 用 ?probe=ts 让每次 import 走新模块,不污染缓存。
+ */
+export async function probeControllerLoadable(userId: number, moduleName: string): Promise<{ ok: boolean; error?: string }> {
+  const controllerPath = join(GENERATED_DIR, String(userId), moduleName, 'controller.ts');
+  if (!existsSync(controllerPath)) {
+    return { ok: false, error: 'controller.ts not found' };
+  }
+  try {
+    const url = pathToFileURL(controllerPath).href + `?probe=${Date.now()}`;
+    // mockContext.run 让 controller.ts 内部 BaseModel 的 userId 上下文可用 — 不少 controller
+    // 在 module top-level 就 new BaseModel('XXX').withMeta('...') ,withMeta 调用就读 mockContext
+    await mockContext.run({ userId }, () => import(url));
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? (err.message || String(err)) : String(err);
+    return { ok: false, error: msg };
+  }
 }

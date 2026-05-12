@@ -17,7 +17,7 @@ import { resolve, join } from 'path';
 import { db, sqlite } from '../core/database.js';
 import { providers, presets, sessions, messages, modules, messageEvents } from '../core/schema.js';
 import { decrypt } from '../core/encryption.js';
-import { computeModuleHealth } from '../core/module-health.js';
+import { computeModuleHealth, probeControllerLoadable } from '../core/module-health.js';
 import { resolveDefaultProviderForUser, findAccessibleProvider } from '../core/provider-resolver.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { buildTools } from './tool-registry.js';
@@ -151,6 +151,14 @@ export class ChatRunner {
 
   /** Expose current user content so tools (e.g. set_module_intent) can fallback when AI omits args. */
   getCurrentUserContent(): string { return this.currentUserContent; }
+
+  // 跟踪本会话内最后一次 run_test 的结果,供 finalize 'done' 前的强校验门用:
+  //   -1 = 还没跑过 run_test
+  //   0  = 跑过且全 pass
+  //   >0 = 有 N 个 case 失败
+  // AI 跑过 run_test 后,这个值会在 'tool-result' stream 事件被解析填入(见 runAIGeneration)。
+  private lastRunTestFailures = -1;
+  private lastRunTestTotal = 0;
 
   private constructor(sessionId: string) {
     this.sessionId = sessionId;
@@ -919,6 +927,14 @@ export class ChatRunner {
               const truncated = resultStr.length > 500 ? resultStr.slice(0, 500) + '...' : resultStr;
               const callId = part.toolCallId || '';
               const callInfo = collectedToolCalls.get(callId);
+              // 记录最后一次 run_test 结果,finalize 'done' guard 用 — AI 不能在 failures>0 时声明完成。
+              // raw 形如 { passed, total, failures: [...] }
+              if ((callInfo?.name === 'run_test' || part.toolName === 'run_test')
+                && raw && typeof raw === 'object') {
+                const r = raw as { failures?: unknown; total?: unknown };
+                this.lastRunTestFailures = Array.isArray(r.failures) ? r.failures.length : 0;
+                this.lastRunTestTotal = typeof r.total === 'number' ? r.total : 0;
+              }
               this.appendEvent('tool_result', {
                 callId,
                 name: part.toolName,
@@ -1036,6 +1052,47 @@ export class ChatRunner {
             .run(finalText, emptyMsg, this.currentMessageId!);
           this.finalize('error', { message: emptyMsg });
           return;
+        }
+
+        // Module-quality guards(只对声明了 moduleIntent 的会话生效):防止 AI "假装完成"
+        // 实际模块不可用。两个独立检查:
+        //   (a) run_test guard - AI 跑过 run_test 但 failures>0 不允许声明 done
+        //   (b) controller-load probe - 物理 import controller.ts 看是否 alias / 语法 throw
+        // 任一失败 → finalize 'error' + 给 AI 看可执行修复建议。
+        if (this.moduleIntent) {
+          const mn = this.moduleIntent.moduleName;
+
+          // (a) run_test failures
+          if (this.lastRunTestFailures > 0) {
+            const failMsg =
+              `模块 "${mn}" 自带回归 run_test 有 ${this.lastRunTestFailures}/${this.lastRunTestTotal} 个 case 失败,`
+              + '不允许声明完成。请逐个修复 controller.ts / schema.sql / _meta.json 直到 run_test 全 pass,'
+              + '不要通过删/改 test.ts assert 跳过失败 case。';
+            sqlite.prepare(`UPDATE messages SET content = ?, message_error = ? WHERE id = ?`)
+              .run(finalText, failMsg, this.currentMessageId!);
+            this.finalize('error', { message: failMsg });
+            return;
+          }
+
+          // (b) controller load probe — 等同于 mock-router 真实加载一次。这是关键防"假装完成"。
+          // 实测场景:AI 用 import from '@core/base-model.js',production Docker 缺 tsconfig.json
+          // 时 alias 失败,mock 请求必 500。computeModuleHealth 只看文件存在,不真实 import,漏报。
+          try {
+            const probe = await probeControllerLoadable(userId, mn);
+            if (!probe.ok) {
+              const loadMsg =
+                `模块 "${mn}" 5 文件已写盘,但 controller.ts 实际加载失败:${probe.error}。`
+                + '这种"假装完成"会让用户访问 /mock/' + mn + '/* 必报 500。请修正 controller.ts'
+                + '(常见原因:import 路径错 / 顶层语法 throw / 引了不存在的模块)后再写一次。';
+              sqlite.prepare(`UPDATE messages SET content = ?, message_error = ? WHERE id = ?`)
+                .run(finalText, loadMsg, this.currentMessageId!);
+              this.finalize('error', { message: loadMsg });
+              return;
+            }
+          } catch (probeErr) {
+            // probe 自己 throw 不应该阻止 finalize — 仅记录 warning
+            console.warn(`[chat-runner] probeControllerLoadable threw for ${mn}:`, probeErr);
+          }
         }
 
         sqlite.prepare(`UPDATE messages SET content = ? WHERE id = ?`)

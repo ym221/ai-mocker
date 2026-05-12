@@ -186,6 +186,11 @@ controller 里 \`new BaseModel(table).withMeta(moduleName)\` 自动接管所有 
    - **写盘前框架硬校验** basePath / endpoints[].path,不合规直接 reject,你必须按报错修正后重试
    - **模块名全局唯一**:与其他用户已有的模块同名时,框架 reject 并要求改名(加业务前缀如 \`acme_order\`)
 5. **controller 导出(单实体) + 签名**:命名导出 \`list/getById/create/update/remove\`,不可 default export。**每个 handler 签名必须是 \`async (req) => ...\`,其中 \`req = { body, query, params }\`**。例:\`export const list = async (req) => { const { page, pageSize, status } = req.query; ... }\` / \`export const getById = async (req) => { const id = req.params.id; ... }\` / \`export const update = async (req) => { const id = req.params.id; const body = req.body; ... }\`。**禁止**用单参数 legacy 签名 \`async (query) => query.page\` 或 \`async (id, body) => ...\`(mock-router 永远传一个 req 对象)
+5.1 **controller.ts / test.ts 的 import 路径硬规则**(违反会让 production Docker 下加载失败 500):
+   - 框架内置模块**必须**用 \`@core/*\` alias:\`import { BaseModel, ValidationError } from '@core/base-model.js'\` / \`import { test, assert, request } from '@core/test-runner.js'\`
+   - **禁止**用相对路径 \`../../core/base-model.js\` 或绝对路径 \`/app/core/...\` —— 这些在 production 路径必错
+   - **禁止**改 alias 为 \`@/...\` 或 \`@server/...\` 之类 —— 框架只配了 \`@core/*\`
+   - 框架会在 finalize 前**真实 import 一次 controller.ts** 验证 alias / 语法,任何 import error / 顶层 throw 都会让本次声明视为失败,你必须修
 6. **controller 导出(多实体,≥2 entities)**:每条 endpoint 在 \`_meta.endpoints[].controller\` 填具名 handler(如 \`listItems\`/\`getWarehouseById\`);controller.ts 导出同名函数,签名 \`async (req) => {...}\`,其中 \`req = { body, query, params }\`。示例:
    \`\`\`
    endpoint: { method:'GET', path:'/items', type:'list', controller:'listItems' }

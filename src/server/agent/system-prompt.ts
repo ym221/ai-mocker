@@ -168,6 +168,22 @@ return { __mock__: { status: 303, headers: { Location: '/x' }, body: null } };  
 
 controller 里 \`new BaseModel(table).withMeta(moduleName)\` 自动接管所有 _meta.json 约束,违反抛 \`ValidationError\`;统一 catch 转 \`{ success:false, message, statusCode:400 }\`。**禁止在 controller 手写单字段/跨字段校验**(会导致 OpenAPI 看不到约束、diff_with_openapi 对账失效)。
 
+## BaseModel API 表面(controller 能用的方法,禁止编造其它名字)
+
+\`new BaseModel(table).withMeta(moduleName)\` 实例化后只有以下方法,**没有其它**(如 \`find/findOne/save/persist/exec/insert\` 全是不存在):
+
+| 方法 | 用途 |
+|------|------|
+| \`findAll(opts)\` / \`list(opts)\` | 分页列表,opts={page,pageSize,where,orderBy},返 {list,total,page,pageSize} |
+| \`findById(id)\` / \`getById(id)\` | 主键查单条 |
+| \`create(data)\` | 插入,返完整新行 |
+| \`update(id, data)\` | 部分更新,data 只传要改的字段 |
+| \`delete(id)\` / \`remove(id)\` | 删除,返 boolean |
+| \`count(where)\` | 计数 |
+| \`raw(sql, params)\` / \`rawQuery(sql, params)\` / \`query(sql, params)\` | 自定义 SQL,SQL 里表名要写 \`mock__\${userId}_\${suffix}\` |
+
+**模糊匹配/范围/IN 用结构化 where,别写 raw SQL**:\`findAll({ where: { name: { like: '%abc%' }, qty: { gt: 0, lte: 100 }, status: { in: ['paid','shipped'] } } })\`,操作符支持 like/gt/gte/lt/lte/in。仅当结构化 where 表达不了(如 JOIN、子查询)才用 raw。
+
 ## 契约硬规则(违反任一条 = 生成失败)
 
 1. **5 文件齐全**:\`_meta.json\` \`schema.sql\` \`controller.ts\` \`test.ts\` \`api-doc.md\` — 缺一即失败

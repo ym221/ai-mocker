@@ -438,34 +438,51 @@ export class ChatRunner {
     else if (terminal === 'error') { lastRunStatus = this._timedOut ? 'timeout' : 'error'; lastRunError = terminalMessage || (this._timedOut ? '生成超时' : '生成失败'); }
     else { lastRunStatus = 'interrupted'; lastRunError = null; }
 
-    // Missing = no files at all
-    if (report.health === 'missing') {
-      if (operation === 'create') {
-        // Timeout 场景下 = 用户等了 10 分钟一个文件没出来,删掉模块行用户会困惑("我明明等了那么久,模块没了")。
-        // 保留 row + status='error',让用户看到清晰的失败原因 + 重试入口;model 反应过慢的,提示换轻量 model。
-        if (this._timedOut) {
-          const minutes = Math.round(RUN_TIMEOUT_MS / 60000);
-          const hint = `生成超时(${minutes} 分钟内未产出任何文件)。可能原因:reasoning model 思考过久(如 deepseek-v4-pro / o1)。建议换 deepseek-chat / deepseek-v4-flash / gpt-4o,或在 .env 调大 CHAT_RUN_TIMEOUT_MS(单位毫秒,如 1800000=30 分钟)。`;
-          sqlite.prepare(
-            `UPDATE modules SET status = 'error', error_message = ?, last_run_status = 'timeout', last_run_error = ?, updated_at = ?
-             WHERE name = ? AND user_id = ?`
-          ).run(hint, terminalMessage || '生成超时', now(), moduleName, userId);
-          return;
-        }
-        // 非 timeout(用户主动 abort / model 决定不写)→ 干净删掉,避免遗留空 row
-        sqlite.prepare(`DELETE FROM modules WHERE name = ? AND user_id = ?`).run(moduleName, userId);
+    // ============================================================================
+    // 终态优先级(从高到低):
+    //   terminal='error' → 必置 'error',无论 health 如何。这是 finalize 守门 (a/b)
+    //     层判定的最终信号:run_test failures>0 / controller probe 失败 / 健康度异常
+    //     都已经在前置走到这里。文件齐全不能推翻"运行时不可用"的事实(典型反例:
+    //     controller 调用了 model.rawQuery 这种编造方法,health=healthy 但访问必 500)。
+    //   terminal='done' + healthy → 'active' (真正可用)
+    //   terminal='done' + degraded/missing → 'error' (缺文件/缺表)
+    //   terminal='paused' / 'aborted' → 看情况,保留为 editing 或清掉
+    // ============================================================================
+
+    // Missing 文件 + create 操作的 timeout/abort 特殊处理(用户体感优先)
+    if (report.health === 'missing' && operation === 'create' && terminal !== 'done') {
+      if (this._timedOut) {
+        const minutes = Math.round(RUN_TIMEOUT_MS / 60000);
+        const hint = `生成超时(${minutes} 分钟内未产出任何文件)。可能原因:reasoning model 思考过久(如 deepseek-v4-pro / o1)。建议换 deepseek-chat / deepseek-v4-flash / gpt-4o,或在 .env 调大 CHAT_RUN_TIMEOUT_MS(单位毫秒,如 1800000=30 分钟)。`;
+        sqlite.prepare(
+          `UPDATE modules SET status = 'error', error_message = ?, last_run_status = 'timeout', last_run_error = ?, updated_at = ?
+           WHERE name = ? AND user_id = ?`
+        ).run(hint, terminalMessage || '生成超时', now(), moduleName, userId);
         return;
       }
-      // Edit op pointing at now-missing module — shouldn't happen; mark error
-      sqlite.prepare(
-        `UPDATE modules SET status = 'error', error_message = ?, last_run_status = ?, last_run_error = ?, updated_at = ?
-         WHERE name = ? AND user_id = ?`
-      ).run('模块文件丢失', lastRunStatus, lastRunError, now(), moduleName, userId);
+      // 用户主动 abort / model 决定不写 → 删空 row,避免遗留
+      sqlite.prepare(`DELETE FROM modules WHERE name = ? AND user_id = ?`).run(moduleName, userId);
       return;
     }
 
-    // Healthy = files + meta + table all present → module usable regardless of session outcome
-    if (report.health === 'healthy') {
+    // terminal=error → 必置 error,文件齐全也不放过(防"假装完成")
+    if (terminal === 'error') {
+      let errMsg = terminalMessage || lastRunError || '生成失败';
+      if (report.health !== 'healthy') {
+        const detail = report.missing.length > 0
+          ? `缺文件 ${report.missing.join('/')}`
+          : (!report.hasTable ? '数据表未创建' : '_meta 不合规');
+        errMsg = `${errMsg}(健康度: ${report.health},${detail})`;
+      }
+      sqlite.prepare(
+        `UPDATE modules SET status = 'error', error_message = ?, last_run_status = ?, last_run_error = ?, updated_at = ?
+         WHERE name = ? AND user_id = ?`
+      ).run(errMsg, lastRunStatus, lastRunError, now(), moduleName, userId);
+      return;
+    }
+
+    // terminal=done + healthy = 真正可用
+    if (terminal === 'done' && report.health === 'healthy') {
       sqlite.prepare(
         `UPDATE modules SET status = 'active', error_message = NULL, last_run_status = ?, last_run_error = ?, updated_at = ?
          WHERE name = ? AND user_id = ?`
@@ -473,15 +490,26 @@ export class ChatRunner {
       return;
     }
 
-    // Degraded = some files/table missing → error; user should retry
-    const missing = report.missing.length > 0
-      ? `文件不完整（缺少 ${report.missing.length} 个）`
-      : (!report.hasTable ? '数据表未创建' : '配置不完整');
-    const errorMessage = terminalMessage || missing;
+    // terminal=done 但 degraded/missing(实际上 chat-runner finalize 守门会先反弹
+    // 拒绝 done,这里是兜底)→ 标 error
+    if (terminal === 'done') {
+      const detail = report.missing.length > 0
+        ? `文件不完整（缺 ${report.missing.join('/')}）`
+        : (!report.hasTable ? '数据表未创建' : '配置不完整');
+      sqlite.prepare(
+        `UPDATE modules SET status = 'error', error_message = ?, last_run_status = ?, last_run_error = ?, updated_at = ?
+         WHERE name = ? AND user_id = ?`
+      ).run(detail, lastRunStatus, lastRunError, now(), moduleName, userId);
+      return;
+    }
+
+    // terminal=paused/aborted + 文件齐全 → 保留 active(用户继续编辑场景)
+    // 文件不齐 → editing 状态(让用户能看到模块,但提示进行中)
+    const newStatus = report.health === 'healthy' ? 'active' : 'editing';
     sqlite.prepare(
-      `UPDATE modules SET status = 'error', error_message = ?, last_run_status = ?, last_run_error = ?, updated_at = ?
+      `UPDATE modules SET status = ?, last_run_status = ?, last_run_error = ?, updated_at = ?
        WHERE name = ? AND user_id = ?`
-    ).run(errorMessage, lastRunStatus, lastRunError, now(), moduleName, userId);
+    ).run(newStatus, lastRunStatus, lastRunError, now(), moduleName, userId);
   }
 
   /** Set before finalize() to emit module cards with fresh DB status. */

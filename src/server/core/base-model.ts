@@ -348,4 +348,21 @@ export class BaseModel {
     const n = typeof id === 'string' ? Number(id) : id;
     return this.delete(n);
   }
+
+  // ==================== Raw SQL aliases ====================
+  // AI 训练数据里 ORM 通常叫 rawQuery/query/exec,凭习惯写 `model.rawQuery(sql, params)`
+  // 而框架原始 API 叫 `raw()` → controller 必报 "rawQuery is not a function" 500。
+  // 这跟 list/getById/remove 同种"框架适应 AI 写法"的别名,不是新增能力。
+  // 注:userId 注入还是依赖外层 mockContext,这些 raw 调用不绕过沙箱(只是绑同一张
+  // 物理表,因为 BaseModel.raw 直接走 sqlite.prepare,sql 里要写明 mock__{userId}_xxx)。
+
+  /** Alias for raw — AI 常写 `model.rawQuery(sql, params)`,等同于 raw()。 */
+  rawQuery(sql: string, params: unknown[] = []): unknown[] {
+    return this.raw(sql, params);
+  }
+
+  /** Alias for raw — AI 常写 `model.query(sql, params)`,等同于 raw()。 */
+  query(sql: string, params: unknown[] = []): unknown[] {
+    return this.raw(sql, params);
+  }
 }

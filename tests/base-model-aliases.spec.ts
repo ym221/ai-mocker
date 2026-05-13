@@ -159,4 +159,62 @@ test.describe('BaseModel outward aliases (Step-Fix-1.6)', () => {
     const body = await res.json();
     expect(body.code).toBe(1);
   });
+
+  test('BA04 rawQuery / query alias 等价于 raw — controller 写 model.rawQuery(...) 也能跑通', async () => {
+    // 用 controller 覆盖一个写法上同时调 rawQuery 的端点。覆盖完后 LRU 缓存清掉,
+    // 下一次请求会真实 dynamic import 新 controller。这模拟 AI 实测会写的 raw SQL 风格。
+    const dir = join(GENERATED_DIR, String(USER_ID), MODULE);
+    const controllerWithRawQuery = `import { BaseModel } from '@core/base-model.js';
+
+const model = new BaseModel('${MODULE}_thing');
+
+export const list = async (req: any) => {
+  const userId = 1;
+  const tableName = \`mock__\${userId}_${MODULE}_thing\`;
+  // 这里关键:走 rawQuery alias(而不是 raw)
+  const rows = model.rawQuery(\`SELECT id, title FROM \\\`\${tableName}\\\` ORDER BY id DESC LIMIT 10\`);
+  return { code: 0, data: { list: rows, total: rows.length, raw: 'via_rawQuery' } };
+};
+
+export const getById = async (req: any) => {
+  // 同时验 query alias
+  const userId = 1;
+  const tableName = \`mock__\${userId}_${MODULE}_thing\`;
+  const rows = model.query(\`SELECT * FROM \\\`\${tableName}\\\` WHERE id = ?\`, [Number(req.params.id)]);
+  if (rows.length === 0) return { code: 1, message: 'not found', statusCode: 404 };
+  return { code: 0, data: { ...rows[0], raw: 'via_query' } };
+};
+
+export const create = async (req: any) => ({ code: 0, data: model.create(req.body) });
+export const update = async (req: any) => ({ code: 0, data: model.update(req.params.id, req.body) });
+export const remove = async (req: any) => ({ code: 0, data: { deleted: model.remove(req.params.id) } });
+`;
+    writeFileSync(join(dir, 'controller.ts'), controllerWithRawQuery, 'utf-8');
+
+    // 先 seed 至少一行
+    await fetch(`${API}/mock/${MODULE}/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'rawQuery-test' }),
+    });
+
+    // 等 mock-router cache bust(它用 ?t=Date.now() 每次重新 import,本来就 fresh)
+    const listRes = await fetch(`${API}/mock/${MODULE}/`);
+    expect(listRes.status, 'rawQuery alias 应不再 500').toBe(200);
+    const listBody = await listRes.json();
+    expect(listBody.code).toBe(0);
+    expect(listBody.data.raw).toBe('via_rawQuery');
+    expect(Array.isArray(listBody.data.list)).toBe(true);
+    expect(listBody.data.list.length).toBeGreaterThan(0);
+
+    // 同时验 query alias
+    const firstId = listBody.data.list[0].id;
+    const detailRes = await fetch(`${API}/mock/${MODULE}/${firstId}`);
+    expect(detailRes.status).toBe(200);
+    const detailBody = await detailRes.json();
+    expect(detailBody.data.raw).toBe('via_query');
+
+    // 还原成原 controller,避免污染其它测试
+    writeFileSync(join(dir, 'controller.ts'), CONTROLLER_TS, 'utf-8');
+  });
 });

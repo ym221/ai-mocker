@@ -111,6 +111,9 @@ test.describe('system-prompt structure', () => {
     // 让 AI 一次性看清访问公式,避免再发生 reconcile/basePath 错配那类 404 bug)
     // Step-Loosen-1 调到 11700(系统字段松绑改写,#2/#2.1 合并 + 描述微调,
     // 净增 ~50B。整体方向是减少框架硬约束,反而让 AI 在 prompt 之外少决策)
+    // Step-Loosen-2 调到 12800(加 BaseModel API 表面表 + findAll where 操作符示例,
+    // 净增 ~900B。AI 屡屡编造 model.rawQuery/find/save 等不存在方法,导致 controller
+    // 运行时 500。表格化 API 表面 + 标注"没有其它"是性价比最高的修复方式)
     const emptyPrompt = buildSystemPrompt(emptyParams);
     const withPresetPrompt = buildSystemPrompt({
       ...emptyParams,
@@ -118,8 +121,8 @@ test.describe('system-prompt structure', () => {
         content: JSON.stringify({ fieldNaming: 'snake_case', responseFormat: { success: true, data: null } }),
       },
     });
-    expect(Buffer.byteLength(emptyPrompt, 'utf8')).toBeLessThan(11700);
-    expect(Buffer.byteLength(withPresetPrompt, 'utf8')).toBeLessThan(11900);
+    expect(Buffer.byteLength(emptyPrompt, 'utf8')).toBeLessThan(12800);
+    expect(Buffer.byteLength(withPresetPrompt, 'utf8')).toBeLessThan(13000);
     // 指引 AI 用 get_module_template 按需拉样例,而不是把样例写死在 prompt 里
     expect(emptyPrompt).toContain('get_module_template');
     // 完整 todo 模板示例(120 行)应已移出,这些特征字符不能再出现在 prompt 里

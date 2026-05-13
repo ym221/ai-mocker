@@ -1,5 +1,20 @@
 import { z } from 'zod';
 import { tool } from 'ai';
+
+/**
+ * LLM 极度常见的反模式:把复合参数(array/object)整个 JSON.stringify 后传过来。
+ * 例:write_files.files 期望 array,LLM 传 `"[{\"path\":\"...\",\"content\":...}]"`。
+ * 严格 zod schema 直接拒,LLM 不知道为啥败,反复 retry 浪费数分钟。
+ *
+ * 这个 preprocess 在 zod 校验前先 JSON.parse string,失败就回退原值让 zod 给出
+ * 正常报错。跟 #12 (content union) 是同种"业务表达层松绑"理念,只是放在外层。
+ */
+function parseIfStringified<T>(val: unknown): T | unknown {
+  if (typeof val === 'string') {
+    try { return JSON.parse(val); } catch { /* fall through to original */ }
+  }
+  return val;
+}
 import { writeFile } from './tools/write-file.js';
 import { writeFiles } from './tools/write-files.js';
 import { readFile } from './tools/read-file.js';
@@ -151,7 +166,7 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         path: z.string().describe('File path relative to generated/{userId}/, e.g., "order/_meta.json"'),
         // content 接受 string | object | array:LLM 写 _meta.json 时经常自然 emit object,
         // 强制 string 会让 zod 在 LLM 第一次调用必失败 1 次。框架在这里 normalize 一次性吸收。
-        content: z.union([z.string(), z.record(z.unknown()), z.array(z.unknown())])
+        content: z.union([z.string(), z.record(z.string(), z.unknown()), z.array(z.unknown())])
           .describe('File content. Plain string OR JSON object/array (auto-stringified).'),
       }),
       execute: async ({ path, content }) => {
@@ -168,13 +183,19 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         + 'Writes multiple files atomically in ONE call — up to 5-6× faster than looping `write_file`. '
         + 'SQL files auto-execute; _meta.json auto-syncs to modules table. If any side-effect fails, the whole batch rolls back on both filesystem and DB. '
         + 'If you attempt this and get "no files provided" errors, switch to `write_file` (single-file) instead. '
-        + 'Each file\'s `content` accepts string OR object/array (auto-stringified).',
+        + 'Each file\'s `content` accepts string OR object/array (auto-stringified). '
+        + '`files` itself also accepts stringified JSON (framework auto-parses).',
       parameters: z.object({
-        files: z.array(z.object({
-          path: z.string().describe('File path relative to generated/{userId}/, e.g., "order/_meta.json"'),
-          content: z.union([z.string(), z.record(z.unknown()), z.array(z.unknown())])
-            .describe('File content. Plain string OR JSON object/array (auto-stringified).'),
-        })).min(1).describe('Array of { path, content }. Keep ordering meaningful: schema.sql should come before _meta.json.'),
+        // files 外层用 preprocess 接 stringified JSON array — LLM 极易把整个数组
+        // stringify 后传过来,严格 z.array 会拒绝,框架自动 parse 一次救活。
+        files: z.preprocess(
+          parseIfStringified,
+          z.array(z.object({
+            path: z.string().describe('File path relative to generated/{userId}/, e.g., "order/_meta.json"'),
+            content: z.union([z.string(), z.record(z.string(), z.unknown()), z.array(z.unknown())])
+              .describe('File content. Plain string OR JSON object/array (auto-stringified).'),
+          })).min(1),
+        ).describe('Array of { path, content }. Keep ordering meaningful: schema.sql should come before _meta.json. Accepts either a real array or a stringified JSON array.'),
       }),
       execute: async ({ files }) => {
         const normalized = (files ?? []).map((f) => ({
@@ -225,13 +246,18 @@ export function buildTools(userId: number, runner?: ChatRunner) {
       parameters: z.object({
         action: z.enum(['list', 'insert', 'update', 'delete', 'batch_delete', 'clear', 'bulk_generate']).describe('Operation to perform'),
         moduleName: z.string().describe('Module name'),
-        data: z.record(z.unknown()).optional().describe('Record data (for insert / update — partial fields ok for update)'),
+        // 所有复合参数(object/array)外层 preprocess,LLM 把 data:{...} 整个
+        // stringify 成 '{"k":"v"}' 是极常见行为,严格 z.record 会拒。
+        data: z.preprocess(parseIfStringified, z.record(z.string(), z.unknown()).optional())
+          .describe('Record data (for insert / update — partial fields ok for update). Accepts object or stringified JSON object.'),
         id: z.number().optional().describe('Record id (for update / delete)'),
-        ids: z.array(z.number()).optional().describe('Record ids (for batch_delete)'),
+        ids: z.preprocess(parseIfStringified, z.array(z.number()).optional())
+          .describe('Record ids (for batch_delete). Accepts array or stringified JSON array.'),
         count: z.number().optional().describe('Number of records to generate (for bulk_generate)'),
         page: z.number().optional().describe('Page number, 1-based (for list)'),
         pageSize: z.number().optional().describe('Records per page (for list, default 20)'),
-        where: z.record(z.unknown()).optional().describe('Filter conditions (for list, e.g. { status: "active" })'),
+        where: z.preprocess(parseIfStringified, z.record(z.string(), z.unknown()).optional())
+          .describe('Filter conditions (for list, e.g. { status: "active" }). Accepts object or stringified JSON object.'),
         entityName: z.string().optional().describe('Entity name (defaults to first entity in _meta.json)'),
       }),
       execute: async ({ action, moduleName, data, count, id, ids, page, pageSize, where, entityName }) =>

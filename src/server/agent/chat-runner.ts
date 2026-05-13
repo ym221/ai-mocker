@@ -152,6 +152,9 @@ export class ChatRunner {
   /** Expose current user content so tools (e.g. set_module_intent) can fallback when AI omits args. */
   getCurrentUserContent(): string { return this.currentUserContent; }
 
+  /** 当前 session 已声明的模块名,write_file/write_files 用来自动补 path 前缀。 */
+  getModuleName(): string | null { return this.moduleIntent?.moduleName ?? null; }
+
   // 跟踪本会话内最后一次 run_test 的结果,供 finalize 'done' 前的强校验门用:
   //   -1 = 还没跑过 run_test
   //   0  = 跑过且全 pass

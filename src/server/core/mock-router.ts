@@ -68,6 +68,23 @@ function matchPath(pattern: string, subPath: string): { matched: boolean; params
 }
 
 export default async function mockRouter(app: FastifyInstance) {
+  // mock 接口常用 form-urlencoded(尤其 spec 里 `Content-Type: application/x-www-form-urlencoded`
+  // 的 POST 接口),用 URLSearchParams 解析成 plain object 喂给 controller。
+  app.addContentTypeParser(
+    'application/x-www-form-urlencoded',
+    { parseAs: 'string' },
+    (_req, body, done) => {
+      try {
+        const params = new URLSearchParams(body as string);
+        const result: Record<string, string> = {};
+        for (const [k, v] of params) result[k] = v;
+        done(null, result);
+      } catch (err) {
+        done(err as Error);
+      }
+    },
+  );
+
   app.all('/mock/*', async (request, reply) => {
     const startTime = Date.now();
     const method = request.method.toUpperCase();

@@ -5,6 +5,7 @@ import { resetTests, runAllTests } from '../../core/test-runner.js';
 import { mockContext } from '../../core/base-model.js';
 import { sqlite } from '../../core/database.js';
 import { getEntities } from '../../core/meta-schema.js';
+import { injectUserIdToTableNames } from '../../core/table-name-prefix.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -50,10 +51,7 @@ export async function runTest(userId: number, moduleName: string): Promise<{
       if (existsSync(schemaPath)) {
         const schemaContent = readFileSync(schemaPath, 'utf-8');
         for (const stmt of extractInsertStatements(schemaContent)) {
-          // userId 前缀注入,与 write-file.ts 一致
-          const injected = stmt
-            .replace(/`mock__([a-zA-Z0-9_]+)`/g, `\`mock__${userId}_$1\``)
-            .replace(/(?<![`\w])mock__([a-zA-Z0-9_]+)(?![`\w])/g, `mock__${userId}_$1`);
+          const injected = injectUserIdToTableNames(stmt, userId);
           try { sqlite.exec(injected); }
           catch (err) {
             console.warn(`[run_test] seed re-insert failed for ${moduleName}: ${(err as Error).message}`);

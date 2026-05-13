@@ -4,6 +4,7 @@ import { join, resolve } from 'path';
 import { sqlite } from './database.js';
 import { normalizeMeta, getEntities, type MetaEntity } from './meta-schema.js';
 import { validate, ValidationError } from './validator.js';
+import { injectUserIdToTableNames } from './table-name-prefix.js';
 
 export { ValidationError } from './validator.js';
 
@@ -314,7 +315,13 @@ export class BaseModel {
   }
 
   raw(sql: string, params: unknown[] = []): unknown[] {
-    return sqlite.prepare(sql).all(...params);
+    // 与 write-file 的 schema.sql 注入对称:AI 写 controller raw SQL 时只能用 bare 表名
+    // (无法预知 runtime userId),框架在这一层自动改写成 `mock__{userId}_Xxx`。
+    const ctx = mockContext.getStore();
+    if (!ctx) {
+      throw new Error('BaseModel.raw: mockContext not set. mock-router must wrap controller dispatch in mockContext.run({ userId }).');
+    }
+    return sqlite.prepare(injectUserIdToTableNames(sql, ctx.userId)).all(...params);
   }
 
   // ==================== Outward-facing aliases (Step-Fix-1.6) ====================

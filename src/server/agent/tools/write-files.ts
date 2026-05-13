@@ -28,6 +28,7 @@ import { sqlite, db } from '../../core/database.js';
 import { modules } from '../../core/schema.js';
 import { eq, and } from 'drizzle-orm';
 import { validateMetaContract, formatContractErrors } from './meta-contract.js';
+import { injectUserIdToTableNames } from '../../core/table-name-prefix.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -266,9 +267,7 @@ export async function writeFiles(userId: number, input: WriteFilesInput): Promis
       for (let i = 0; i < prepared.length; i++) {
         const p = prepared[i];
         if (p.path.endsWith('.sql')) {
-          const injectedSql = p.content
-            .replace(/`mock__([a-zA-Z0-9_]+)`/g, `\`mock__${userId}_$1\``)
-            .replace(/(?<![`\w])mock__([a-zA-Z0-9_]+)(?![`\w])/g, `mock__${userId}_$1`);
+          const injectedSql = injectUserIdToTableNames(p.content, userId);
           try {
             sqlite.exec(injectedSql);
           } catch (err) {

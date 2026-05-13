@@ -9,6 +9,17 @@ function parseIfStringified<T>(val: unknown): T | unknown {
   }
   return val;
 }
+
+/** AI 调 set_module_intent 后,写 path 经常省模块名前缀(写 "_meta.json" 而不是
+ *  "tm_reconcile/_meta.json")。框架按当前 session 的 moduleIntent.moduleName
+ *  自动补上,把"AI 心智模型"和"框架要求"对齐。 */
+function autoPrefixModulePath(path: string, moduleName: string | null | undefined): string {
+  if (!moduleName) return path;
+  const cleaned = path.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+  // 已经在某个模块目录下(含 /)或带 generated/ 前缀 → 不动
+  if (cleaned.includes('/') || cleaned.startsWith('generated')) return path;
+  return `${moduleName}/${cleaned}`;
+}
 import { writeFile } from './tools/write-file.js';
 import { writeFiles } from './tools/write-files.js';
 import { readFile } from './tools/read-file.js';
@@ -172,8 +183,9 @@ export function buildTools(userId: number, runner?: ChatRunner) {
       }),
       execute: async ({ path, content }) => {
         const text = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
-        return instrument('write_file', { path, contentBytes: text.length }, () =>
-          serialize(() => writeFile(userId, path, text)),
+        const finalPath = autoPrefixModulePath(path, runner?.getModuleName());
+        return instrument('write_file', { path: finalPath, contentBytes: text.length }, () =>
+          serialize(() => writeFile(userId, finalPath, text)),
         );
       },
     }),
@@ -197,8 +209,9 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         ).describe('Array of { path, content }. Schema.sql should come before _meta.json. Accepts either a real array or a stringified JSON array.'),
       }),
       execute: async ({ files }) => {
+        const moduleName = runner?.getModuleName();
         const normalized = (files ?? []).map((f) => ({
-          path: f.path,
+          path: autoPrefixModulePath(f.path, moduleName),
           content: typeof f.content === 'string' ? f.content : JSON.stringify(f.content, null, 2),
         }));
         return instrument(

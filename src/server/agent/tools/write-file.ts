@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
-import { dirname, join, resolve, normalize } from 'path';
+import { dirname, join, resolve } from 'path';
 import { sqlite, db } from '../../core/database.js';
 import { modules } from '../../core/schema.js';
 import { eq, and } from 'drizzle-orm';
 import { validateMetaContract, formatContractErrors } from './meta-contract.js';
+import { injectUserIdToTableNames } from '../../core/table-name-prefix.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -192,11 +193,7 @@ export async function writeFile(userId: number, path: string, content: string): 
   // Auto-execute SQL files
   if (path.endsWith('.sql')) {
     try {
-      // 注入 userId 前缀：mock__{suffix} → mock__{userId}_{suffix}
-      // 匹配标识符中的 mock__xxx（反引号包裹或裸名）
-      const injectedSql = content
-        .replace(/`mock__([a-zA-Z0-9_]+)`/g, `\`mock__${userId}_$1\``)
-        .replace(/(?<![`\w])mock__([a-zA-Z0-9_]+)(?![`\w])/g, `mock__${userId}_$1`);
+      const injectedSql = injectUserIdToTableNames(content, userId);
       sqlite.exec(injectedSql);
 
       // Reconcile schema drift: SQLite's CREATE TABLE IF NOT EXISTS is a no-op

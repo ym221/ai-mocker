@@ -4,6 +4,7 @@ import { faker } from '@faker-js/faker';
 import { BaseModel, mockContext } from '../../core/base-model.js';
 import { sqlite } from '../../core/database.js';
 import { getEntities } from '../../core/meta-schema.js';
+import { injectUserIdToTableNames } from '../../core/table-name-prefix.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -139,9 +140,7 @@ function ensureTableExists(userId: number, moduleName: string, tableName: string
   );
 
   const raw = readFileSync(sqlPath, 'utf-8');
-  const injected = raw
-    .replace(/`mock__([a-zA-Z0-9_]+)`/g, `\`mock__${userId}_$1\``)
-    .replace(/(?<![`\w])mock__([a-zA-Z0-9_]+)(?![`\w])/g, `mock__${userId}_$1`);
+  const injected = injectUserIdToTableNames(raw, userId);
   try {
     sqlite.exec(injected);
   } catch (e) {

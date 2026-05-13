@@ -47,25 +47,26 @@ const SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS \`mock__${MODULE}_thing\` (
 );`;
 
 // Controller uses the NEW outward-facing alias names (list/getById/remove) on BaseModel.
-// This is the exact pattern AI produces for multi-entity modules.
+// 签名统一 `async (req) => ...`,其中 req = { body, query, params }。
 const CONTROLLER_TS = `import { BaseModel } from '@core/base-model.js';
 
 const model = new BaseModel('${MODULE}_thing');
 
-export const list = async (query: any) => {
-  const r = model.list({ page: Number(query?.page) || 1, pageSize: Number(query?.pageSize) || 20 });
+export const list = async (req: any) => {
+  const q = req.query || {};
+  const r = model.list({ page: Number(q.page) || 1, pageSize: Number(q.pageSize) || 20 });
   return { code: 0, data: r };
 };
 
-export const getById = async (id: any) => {
-  const item = model.getById(id);  // string ID from URL params
+export const getById = async (req: any) => {
+  const item = model.getById(req.params.id);
   if (!item) return { code: 1, message: 'not found', statusCode: 404 };
   return { code: 0, data: item };
 };
 
-export const create = async (body: any) => ({ code: 0, data: model.create(body) });
-export const update = async (id: any, body: any) => ({ code: 0, data: model.update(id, body) });
-export const remove = async (id: any) => ({ code: 0, data: { deleted: model.remove(id) } });
+export const create = async (req: any) => ({ code: 0, data: model.create(req.body) });
+export const update = async (req: any) => ({ code: 0, data: model.update(req.params.id, req.body) });
+export const remove = async (req: any) => ({ code: 0, data: { deleted: model.remove(req.params.id) } });
 `;
 
 function ensureModule() {

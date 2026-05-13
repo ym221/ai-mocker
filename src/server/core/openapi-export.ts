@@ -110,8 +110,8 @@ export function buildOpenApi(userId: number, moduleName: string): Record<string,
       patchProperties[f.name] = oapiSchema;
       if (f.required) required.push(f.name);
     }
-    properties.created_at = { type: 'string', format: 'date-time', description: 'Created at' };
-    properties.updated_at = { type: 'string', format: 'date-time', description: 'Updated at' };
+    // 框架不再硬塞 created_at / updated_at —— 用户/AI 想在响应里暴露时间戳就把
+    // 它们写进 _meta.json entities[].fields,这里自然会渲染。
     const schemas = spec.components.schemas as Record<string, any>;
     schemas[ent.name] = {
       type: 'object',

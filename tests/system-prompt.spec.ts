@@ -109,6 +109,8 @@ test.describe('system-prompt structure', () => {
     // Step-URL-Routing 调到 11500(把弱表述的"path 不加模块名前缀"升级成
     // 完整 URL 公式段:basePath/endpoints.path 铁律 + 模块名全局唯一,~+800B,
     // 让 AI 一次性看清访问公式,避免再发生 reconcile/basePath 错配那类 404 bug)
+    // Step-Loosen-1 调到 11700(系统字段松绑改写,#2/#2.1 合并 + 描述微调,
+    // 净增 ~50B。整体方向是减少框架硬约束,反而让 AI 在 prompt 之外少决策)
     const emptyPrompt = buildSystemPrompt(emptyParams);
     const withPresetPrompt = buildSystemPrompt({
       ...emptyParams,
@@ -116,13 +118,16 @@ test.describe('system-prompt structure', () => {
         content: JSON.stringify({ fieldNaming: 'snake_case', responseFormat: { success: true, data: null } }),
       },
     });
-    expect(Buffer.byteLength(emptyPrompt, 'utf8')).toBeLessThan(11500);
-    expect(Buffer.byteLength(withPresetPrompt, 'utf8')).toBeLessThan(11700);
+    expect(Buffer.byteLength(emptyPrompt, 'utf8')).toBeLessThan(11700);
+    expect(Buffer.byteLength(withPresetPrompt, 'utf8')).toBeLessThan(11900);
     // 指引 AI 用 get_module_template 按需拉样例,而不是把样例写死在 prompt 里
     expect(emptyPrompt).toContain('get_module_template');
     // 完整 todo 模板示例(120 行)应已移出,这些特征字符不能再出现在 prompt 里
     expect(emptyPrompt).not.toContain('CREATE TABLE IF NOT EXISTS `mock__todo`');
-    expect(emptyPrompt).not.toContain("import { test, assert, request } from '@core/test-runner.js'");
+    // 注:`@core/test-runner.js` 这个 import 串现仍在 prompt 内(作为 #5.1 alias
+    // 硬规则的示例,不是完整 test.ts 模板)。完整 test.ts 样例确实已移出 — 检查整段
+    // import 语境而不是单串。
+    expect(emptyPrompt).not.toContain("test('创建待办', async (ctx)");
   });
 
   test('SP08 (Step-Fix-1.4) 5 必需文件清单明示', () => {
@@ -135,13 +140,15 @@ test.describe('system-prompt structure', () => {
     expect(prompt).toContain('缺一');
   });
 
-  test('SP09 (Step-Fix-1.4) schema.sql 硬规则要求 created_at + updated_at 列', () => {
+  test('SP09 (松绑后) schema.sql 时间戳字段改为按需可选,框架不强制', () => {
     const prompt = buildSystemPrompt(emptyParams);
-    expect(prompt).toContain('created_at');
-    expect(prompt).toContain('updated_at');
+    // 主键 id 自增仍然是硬规则
+    expect(prompt).toContain('INTEGER PRIMARY KEY AUTOINCREMENT');
+    // 时间戳不强制,由用户/AI 按 spec 决定
+    expect(prompt).toContain('按用户 spec 决定');
+    expect(prompt).toContain('框架不自动管');
+    // 但仍给出加时间戳时的 DEFAULT 指引
     expect(prompt).toContain('CURRENT_TIMESTAMP');
-    // 解释原因,让 AI 理解不是可选规则
-    expect(prompt).toContain('BaseModel');
   });
 
   test('SP10 (Step-Fix-1.4) _meta.json 禁用 legacy entity 字段,只用 entities[]', () => {

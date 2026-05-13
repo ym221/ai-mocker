@@ -72,32 +72,34 @@ function asValidationFail(e: unknown) {
   throw e;
 }
 
-export function list(query: Record<string, string>) {
-  const page = Number(query.page) || 1;
-  const pageSize = Number(query.pageSize) || 20;
+export const list = async (req: any) => {
+  const q = req.query || {};
+  const page = Number(q.page) || 1;
+  const pageSize = Number(q.pageSize) || 20;
   const r = model.findAll({ page, pageSize });
   return paginated(r.list, r.total, r.page, r.pageSize);
-}
-export function getById(id: string) {
-  const item = model.findById(Number(id));
+};
+export const getById = async (req: any) => {
+  const item = model.findById(Number(req.params.id));
   if (!item) return { success: false, message: '记录不存在', statusCode: 404 };
   return success(item);
-}
-export function create(body: Record<string, unknown>) {
-  try { return success(model.create(body), '创建成功'); }
+};
+export const create = async (req: any) => {
+  try { return success(model.create(req.body), '创建成功'); }
   catch (e) { return asValidationFail(e); }
-}
-export function update(id: string, body: Record<string, unknown>) {
-  const existing = model.findById(Number(id));
+};
+export const update = async (req: any) => {
+  const id = Number(req.params.id);
+  const existing = model.findById(id);
   if (!existing) return { success: false, message: '记录不存在', statusCode: 404 };
-  try { return success(model.update(Number(id), body), '更新成功'); }
+  try { return success(model.update(id, req.body), '更新成功'); }
   catch (e) { return asValidationFail(e); }
-}
-export function remove(id: string) {
-  const deleted = model.delete(Number(id));
+};
+export const remove = async (req: any) => {
+  const deleted = model.delete(Number(req.params.id));
   if (!deleted) return { success: false, message: '记录不存在', statusCode: 404 };
   return success(null, '删除成功');
-}
+};
 `, 'utf-8');
 
   writeFileSync(join(dir, 'test.ts'), `import { test, assert } from '@core/test-runner.js';\ntest('n', async () => { assert.ok(true); });\n`, 'utf-8');
@@ -218,18 +220,18 @@ test.describe('BaseModel.withMeta() 自动校验 + controller 转 400', () => {
     writeFileSync(join(dir, 'controller.ts'), `import { BaseModel } from '@core/base-model.js';
 import { success, paginated } from '@core/response.js';
 const model = new BaseModel('mock__${MODULE}');  // 无 .withMeta() — 走旧路径
-export function list(q: Record<string, string>) {
+export const list = async (req: any) => {
   const r = model.findAll({ page: 1, pageSize: 20 });
   return paginated(r.list, r.total, r.page, r.pageSize);
-}
-export function getById(id: string) {
-  const item = model.findById(Number(id));
+};
+export const getById = async (req: any) => {
+  const item = model.findById(Number(req.params.id));
   if (!item) return { success: false, message: '记录不存在' };
   return success(item);
-}
-export function create(b: Record<string, unknown>) { return success(model.create(b)); }
-export function update(id: string, b: Record<string, unknown>) { return success(model.update(Number(id), b)); }
-export function remove(id: string) { return success(null, model.delete(Number(id)) ? 'ok' : 'not found'); }
+};
+export const create = async (req: any) => success(model.create(req.body));
+export const update = async (req: any) => success(model.update(Number(req.params.id), req.body));
+export const remove = async (req: any) => success(null, model.delete(Number(req.params.id)) ? 'ok' : 'not found');
 `, 'utf-8');
     // 老 controller 应能"违法"创建 (sku=null, qty 越界都不报)
     const r = await postMock({ sku: 'XX', qty: -100, status: 'unknown' });

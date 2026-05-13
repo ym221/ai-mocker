@@ -145,15 +145,21 @@ export function buildTools(userId: number, runner?: ChatRunner) {
     write_file: tool({
       description:
         'Write ONE file to generated/{userId}/. Use this when you cannot emit nested array schemas (small models) or when you want to write files one at a time for better control. '
-        + 'SQL files auto-execute; _meta.json auto-syncs to modules table. For efficient multi-file writes (5-6 files at once), prefer `write_files` — but if you struggle with its nested schema, fall back to calling `write_file` once per file.',
+        + 'SQL files auto-execute; _meta.json auto-syncs to modules table. For efficient multi-file writes (5-6 files at once), prefer `write_files` — but if you struggle with its nested schema, fall back to calling `write_file` once per file. '
+        + '`content` accepts string OR object/array (will be auto-JSON.stringify-ed) — emit native JSON for _meta.json if more natural.',
       parameters: z.object({
         path: z.string().describe('File path relative to generated/{userId}/, e.g., "order/_meta.json"'),
-        content: z.string().describe('Full file content'),
+        // content 接受 string | object | array:LLM 写 _meta.json 时经常自然 emit object,
+        // 强制 string 会让 zod 在 LLM 第一次调用必失败 1 次。框架在这里 normalize 一次性吸收。
+        content: z.union([z.string(), z.record(z.unknown()), z.array(z.unknown())])
+          .describe('File content. Plain string OR JSON object/array (auto-stringified).'),
       }),
-      execute: async ({ path, content }) =>
-        instrument('write_file', { path, contentBytes: content?.length ?? 0 }, () =>
-          serialize(() => writeFile(userId, path, content)),
-        ),
+      execute: async ({ path, content }) => {
+        const text = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+        return instrument('write_file', { path, contentBytes: text.length }, () =>
+          serialize(() => writeFile(userId, path, text)),
+        );
+      },
     }),
 
     write_files: tool({
@@ -161,19 +167,26 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         'PREFERRED when your model reliably emits nested array schemas (Claude/GPT-4/large Gemini). '
         + 'Writes multiple files atomically in ONE call — up to 5-6× faster than looping `write_file`. '
         + 'SQL files auto-execute; _meta.json auto-syncs to modules table. If any side-effect fails, the whole batch rolls back on both filesystem and DB. '
-        + 'If you attempt this and get "no files provided" errors, switch to `write_file` (single-file) instead.',
+        + 'If you attempt this and get "no files provided" errors, switch to `write_file` (single-file) instead. '
+        + 'Each file\'s `content` accepts string OR object/array (auto-stringified).',
       parameters: z.object({
         files: z.array(z.object({
           path: z.string().describe('File path relative to generated/{userId}/, e.g., "order/_meta.json"'),
-          content: z.string().describe('File content'),
+          content: z.union([z.string(), z.record(z.unknown()), z.array(z.unknown())])
+            .describe('File content. Plain string OR JSON object/array (auto-stringified).'),
         })).min(1).describe('Array of { path, content }. Keep ordering meaningful: schema.sql should come before _meta.json.'),
       }),
-      execute: async ({ files }) =>
-        instrument(
+      execute: async ({ files }) => {
+        const normalized = (files ?? []).map((f) => ({
+          path: f.path,
+          content: typeof f.content === 'string' ? f.content : JSON.stringify(f.content, null, 2),
+        }));
+        return instrument(
           'write_files',
-          { fileCount: files?.length ?? 0, paths: (files ?? []).slice(0, 8).map((f) => f.path) },
-          () => serialize(() => writeFiles(userId, { files })),
-        ),
+          { fileCount: normalized.length, paths: normalized.slice(0, 8).map((f) => f.path) },
+          () => serialize(() => writeFiles(userId, { files: normalized })),
+        );
+      },
     }),
 
     read_file: tool({

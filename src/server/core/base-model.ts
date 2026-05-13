@@ -229,19 +229,11 @@ export class BaseModel {
     const tableName = this.getTableName();
     const cleanData = { ...data };
 
-    // Remove framework-managed system fields(snake_case 约定):let DB DEFAULT 处理
+    // id 是 AUTOINCREMENT 主键,用户不能传(否则覆盖 lastInsertRowid 语义)。
+    // 其它字段一律透传:框架不再对 created_at/updated_at/createdAt/updatedAt 做特殊
+    // 处理。用户/AI 想要时间戳:要么 schema.sql 写 DEFAULT CURRENT_TIMESTAMP / DEFAULT
+    // (datetime('now')) 由 DB 管;要么 controller create 时显式赋值。框架不替用户决策。
     delete cleanData.id;
-    delete cleanData.created_at;
-    delete cleanData.updated_at;
-    // camelCase 时间字段(createdAt/updatedAt)视为业务字段:仅当 controller 没显式赋值
-    // 才删除走 DB DEFAULT;controller 已 set(controller.ts 里写 createdAt: nowISO())时保留,
-    // 否则 schema.sql 写 NOT NULL 又没 DEFAULT 时会 NOT NULL constraint failed。
-    if ((cleanData as Record<string, unknown>).createdAt == null) {
-      delete (cleanData as Record<string, unknown>).createdAt;
-    }
-    if ((cleanData as Record<string, unknown>).updatedAt == null) {
-      delete (cleanData as Record<string, unknown>).updatedAt;
-    }
 
     // Auto-validate against bound meta (no-op if .withMeta() was never called)
     this.maybeValidate(cleanData, 'create');
@@ -284,16 +276,10 @@ export class BaseModel {
     const numId = typeof id === 'string' ? Number(id) : id;
     const cleanData = { ...data };
 
-    // Remove system fields — don't update these(update 操作不能改 created_at/createdAt)
+    // 只剥 id(主键不允许 update)。其它字段全透传 — 框架不再硬塞 updated_at。
+    // 用户/AI 想要"更新时自动刷新时间戳":controller update 时显式赋 updatedAt,
+    // 或在 schema.sql 加 UPDATE TRIGGER。框架不替用户决策。
     delete cleanData.id;
-    delete cleanData.created_at;
-    delete (cleanData as Record<string, unknown>).createdAt;
-    // updated_at 框架自动维护,删
-    delete cleanData.updated_at;
-    // updatedAt(camelCase 业务字段):若 controller 显式 set 则保留,否则删
-    if ((cleanData as Record<string, unknown>).updatedAt == null) {
-      delete (cleanData as Record<string, unknown>).updatedAt;
-    }
 
     // Auto-validate (partial-merge with existing row so cross-field rules see
     // the post-update state, not just the patch fragment)
@@ -302,8 +288,10 @@ export class BaseModel {
       this.maybeValidate(cleanData, 'update', existing);
     }
 
-    // Set updated_at
-    cleanData.updated_at = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    // 空 patch 直接返当前行,避免空 SET 子句让 SQL 报错
+    if (Object.keys(cleanData).length === 0) {
+      return this.findById(numId)!;
+    }
 
     const setClauses = Object.keys(cleanData).map(c => `\`${c}\` = ?`).join(', ');
     const values = Object.values(cleanData).map(normalizeBindValue);

@@ -52,16 +52,18 @@ endpoints.type 枚举: list/detail/create/update/delete/custom。path 不要加�
 CREATE TABLE IF NOT EXISTS \`mock__todo\` (
   \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
   \`title\` TEXT NOT NULL,
-  \`done\` INTEGER DEFAULT 0,
-  \`created_at\` TEXT DEFAULT (datetime('now')),
-  \`updated_at\` TEXT DEFAULT (datetime('now'))
+  \`done\` INTEGER DEFAULT 0
 );
 \`\`\`
 
 表名 === \`mock__\${entity.name}\`,系统 exec 时自动注入 userId 前缀。
 
+**时间戳字段(可选,框架不要求)**:用户需求里若提到创建/更新时间,自己加列,如
+\`created_at TEXT DEFAULT (datetime('now'))\`、\`updated_at TEXT DEFAULT (datetime('now'))\`。
+没提就不加。NOT NULL 必带 DEFAULT。
+
 ## 3. todo/controller.ts
-必须命名导出 list/getById/create/update/remove,禁 default export。用 \`.withMeta('todo')\` 自动接 _meta.json 约束。
+必须命名导出 list/getById/create/update/remove,禁 default export。每个 handler 签名 \`async (req) => ...\`,其中 \`req = { body, query, params }\`。用 \`.withMeta('todo')\` 自动接 _meta.json 约束。
 
 \`\`\`ts
 import { BaseModel, ValidationError } from '@core/base-model.js';
@@ -76,38 +78,39 @@ function asValidationFail(e: unknown) {
   throw e;
 }
 
-export function list(query: Record<string, string>) {
-  const page = Number(query.page) || 1;
-  const pageSize = Number(query.pageSize) || 20;
+export const list = async (req) => {
+  const page = Number(req.query.page) || 1;
+  const pageSize = Number(req.query.pageSize) || 20;
   const where: Record<string, unknown> = {};
-  if (query.done !== undefined) where.done = query.done === 'true' ? 1 : 0;
+  if (req.query.done !== undefined) where.done = req.query.done === 'true' ? 1 : 0;
   const result = model.findAll({ page, pageSize, where });
   return paginated(result.list, result.total, result.page, result.pageSize);
-}
+};
 
-export function getById(id: string) {
-  const item = model.findById(Number(id));
+export const getById = async (req) => {
+  const item = model.findById(Number(req.params.id));
   if (!item) return { success: false, message: '记录不存在', statusCode: 404 };
   return success(item);
-}
+};
 
-export function create(body: Record<string, unknown>) {
-  try { return success(model.create(body), '创建成功'); }
+export const create = async (req) => {
+  try { return success(model.create(req.body), '创建成功'); }
   catch (e) { return asValidationFail(e); }
-}
+};
 
-export function update(id: string, body: Record<string, unknown>) {
-  const existing = model.findById(Number(id));
+export const update = async (req) => {
+  const id = Number(req.params.id);
+  const existing = model.findById(id);
   if (!existing) return { success: false, message: '记录不存在', statusCode: 404 };
-  try { return success(model.update(Number(id), body), '更新成功'); }
+  try { return success(model.update(id, req.body), '更新成功'); }
   catch (e) { return asValidationFail(e); }
-}
+};
 
-export function remove(id: string) {
-  const deleted = model.delete(Number(id));
+export const remove = async (req) => {
+  const deleted = model.delete(Number(req.params.id));
   if (!deleted) return { success: false, message: '记录不存在', statusCode: 404 };
   return success(null, '删除成功');
-}
+};
 \`\`\`
 
 ## 4. todo/test.ts

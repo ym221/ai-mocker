@@ -171,11 +171,7 @@ controller 里 \`new BaseModel(table).withMeta(moduleName)\` 自动接管所有 
 ## 契约硬规则(违反任一条 = 生成失败)
 
 1. **5 文件齐全**:\`_meta.json\` \`schema.sql\` \`controller.ts\` \`test.ts\` \`api-doc.md\` — 缺一即失败
-2. **schema.sql 主键 + 时间戳列必填**:每张表必须含
-   - \`id INTEGER PRIMARY KEY AUTOINCREMENT\` (**禁止** \`TEXT PRIMARY KEY\` —— 会让 INSERT 拿不到自增 id,findById 返回 null,所有 CRUD 测试连续失败)
-   - \`created_at TEXT DEFAULT CURRENT_TIMESTAMP\` (BaseModel 自动管理,框架级系统字段)
-   - \`updated_at TEXT DEFAULT CURRENT_TIMESTAMP\` (BaseModel.update 自动写 updated_at,缺列运行时报错)
-2.1 **任何 NOT NULL 的时间戳列必须有 DEFAULT**(无论命名 \`created_at\` 还是 \`createdAt\`):写 \`createdAt TEXT NOT NULL\` 而**不带** \`DEFAULT\` 会触发 INSERT 时 NOT NULL constraint failed —— 必须改成 \`createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP\` 或 \`createdAt TEXT NOT NULL DEFAULT (datetime('now'))\`。优先用框架默认的 snake_case \`created_at\`/\`updated_at\` —— 用 camelCase 一定要在 schema.sql 里加 DEFAULT,否则只能在 controller.create 里显式 \`createdAt: new Date().toISOString()\`。
+2. **schema.sql 主键**:每张表必须 \`id INTEGER PRIMARY KEY AUTOINCREMENT\`(禁 \`TEXT PRIMARY KEY\`)。其它字段按用户 spec 决定 — 框架不自动管 \`created_at/updated_at\`;若加且 NOT NULL,必须 \`DEFAULT CURRENT_TIMESTAMP\`。
 3. **_meta.json 实体入口唯一**:所有实体写进 \`entities: [...]\` 数组。**禁用**顶层 \`entity\` 字段(老格式,框架已移除此路径)。\`entities[i].tableName === "mock__" + entities[i].name\`;\`schema.sql\` 的 CREATE TABLE 表名 === entity.tableName(系统自动注入 userId 前缀)
 4. **URL 公式 + endpoints.path 铁律**:
    - 完整访问 URL = \`<MCP origin>/mock/<moduleName><endpoint.path>\`(框架自动加 \`/mock/<moduleName>\` 前缀)

@@ -97,23 +97,9 @@ test.describe('system-prompt structure', () => {
     expect(prompt).toContain('所有金额字段统一用 BigInt 分单位');
   });
 
-  test('SP07 slim 后的 prompt 体积 ≤ 11.5KB (原 18KB)', () => {
-    // 核心目的: Step-Perf-1.1 的提速来自 prompt 瘦身, 回归防止未来再次膨胀
-    // Step-Fix-1.4 把阈值从 8000 调到 8500(加了 5-file 清单 / 时间戳列 /
-    // 多实体 controller 样例等契约硬规则,净增 ~350 bytes,仍远低于原 18KB)
-    // Step-Observability-1.4 调到 9000(加了"数据修改铁律"硬规则,
-    // 防 LLM 用 clear+insert 假装 update 清空数据,净增 ~150 bytes)
-    // Step-Chat-Polish-N 调到 10500(放宽"安全边界"允许 MockForge 元问答 +
-    // 拒答规则细化,实测 baseline 已达 9601B,即原阈值在本次改动前已偏紧,
-    // 调到 10500 留 ~500B 头部空间)
-    // Step-URL-Routing 调到 11500(把弱表述的"path 不加模块名前缀"升级成
-    // 完整 URL 公式段:basePath/endpoints.path 铁律 + 模块名全局唯一,~+800B,
-    // 让 AI 一次性看清访问公式,避免再发生 reconcile/basePath 错配那类 404 bug)
-    // Step-Loosen-1 调到 11700(系统字段松绑改写,#2/#2.1 合并 + 描述微调,
-    // 净增 ~50B。整体方向是减少框架硬约束,反而让 AI 在 prompt 之外少决策)
-    // Step-Loosen-2 调到 12800(加 BaseModel API 表面表 + findAll where 操作符示例,
-    // 净增 ~900B。AI 屡屡编造 model.rawQuery/find/save 等不存在方法,导致 controller
-    // 运行时 500。表格化 API 表面 + 标注"没有其它"是性价比最高的修复方式)
+  test('SP07 prompt 体积上限 — 回归防膨胀', () => {
+    // prompt 瘦身后 < 12.8KB(完整 todo 模板 ~8KB 已移到 get_module_template 工具按需拉)。
+    // 加新规则前先评估 byte 成本,该 bound 是软约束,有充分理由可调高。
     const emptyPrompt = buildSystemPrompt(emptyParams);
     const withPresetPrompt = buildSystemPrompt({
       ...emptyParams,
@@ -123,13 +109,9 @@ test.describe('system-prompt structure', () => {
     });
     expect(Buffer.byteLength(emptyPrompt, 'utf8')).toBeLessThan(12800);
     expect(Buffer.byteLength(withPresetPrompt, 'utf8')).toBeLessThan(13000);
-    // 指引 AI 用 get_module_template 按需拉样例,而不是把样例写死在 prompt 里
+    // 用 get_module_template 工具按需拉样例,不在 prompt 里写死
     expect(emptyPrompt).toContain('get_module_template');
-    // 完整 todo 模板示例(120 行)应已移出,这些特征字符不能再出现在 prompt 里
     expect(emptyPrompt).not.toContain('CREATE TABLE IF NOT EXISTS `mock__todo`');
-    // 注:`@core/test-runner.js` 这个 import 串现仍在 prompt 内(作为 #5.1 alias
-    // 硬规则的示例,不是完整 test.ts 模板)。完整 test.ts 样例确实已移出 — 检查整段
-    // import 语境而不是单串。
     expect(emptyPrompt).not.toContain("test('创建待办', async (ctx)");
   });
 
@@ -143,14 +125,14 @@ test.describe('system-prompt structure', () => {
     expect(prompt).toContain('缺一');
   });
 
-  test('SP09 (松绑后) schema.sql 时间戳字段改为按需可选,框架不强制', () => {
+  test('SP09 schema.sql 时间戳字段按需可选,框架不强制', () => {
     const prompt = buildSystemPrompt(emptyParams);
-    // 主键 id 自增仍然是硬规则
+    // 主键 id 自增是硬规则
     expect(prompt).toContain('INTEGER PRIMARY KEY AUTOINCREMENT');
-    // 时间戳不强制,由用户/AI 按 spec 决定
+    // 时间戳由用户/AI 按 spec 决定,框架不自动管
     expect(prompt).toContain('按用户 spec 决定');
     expect(prompt).toContain('框架不自动管');
-    // 但仍给出加时间戳时的 DEFAULT 指引
+    // 加时间戳时的 DEFAULT 指引
     expect(prompt).toContain('CURRENT_TIMESTAMP');
   });
 

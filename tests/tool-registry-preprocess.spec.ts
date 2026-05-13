@@ -1,9 +1,9 @@
 /**
- * tool-registry 复合参数 preprocess 单元测试 — Step-Loosen-3。
+ * tool-registry 复合参数 preprocess 单元测试。
  *
- * 验证修复: LLM 经常把 array/object 整个 JSON.stringify 后传过来,严格 zod
- * 会拒绝触发反复 retry。这里直接构造和 tool-registry 同款的 zod schema 验
- * 证 preprocess 行为,不需要起 LLM 真实通路。
+ * LLM 经常把 array/object 整个 JSON.stringify 后传给 tool args,框架在 zod 校验
+ * 前先 JSON.parse 一次。直接构造和 tool-registry 同款 schema 验证,不需要起
+ * LLM 真实通路。
  */
 import { test, expect } from '@playwright/test';
 import { z } from 'zod';
@@ -34,7 +34,7 @@ const manageDataSchema = z.object({
   where: z.preprocess(parseIfStringified, z.record(z.string(), z.unknown()).optional()),
 });
 
-test.describe('tool args preprocess (Step-Loosen-3)', () => {
+test.describe('tool args preprocess', () => {
   test('PP01 write_files.files 接 stringified JSON array (LLM 实测反模式)', () => {
     const r = writeFilesSchema.safeParse({
       files: '[{"path":"tm_reconcile/_meta.json","content":{"name":"tm_reconcile"}}]',
@@ -54,7 +54,7 @@ test.describe('tool args preprocess (Step-Loosen-3)', () => {
     expect(r.success).toBe(true);
   });
 
-  test('PP03 write_files.files[i].content 接 object (#12 + Step-Loosen-3)', () => {
+  test('PP03 write_files.files[i].content 接 object (content union)', () => {
     const r = writeFilesSchema.safeParse({
       files: [{ path: 'a.json', content: { nested: { x: 1, y: [2, 3] } } }],
     });

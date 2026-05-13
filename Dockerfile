@@ -37,13 +37,8 @@ ENV NODE_ENV=production \
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
-# tsx ESM hook 在 production 处理 AI 生成的 .ts 文件(controller.ts/test.ts)时,
-# 需要读 tsconfig.json 解析 `@core/*` paths alias,否则 `import from '@core/base-model.js'`
-# 会被 Node 当作 root-relative 路径 → "Cannot find module '/app/core/base-model.js'" 500。
-#
-# 关键:开发期 paths 指 src/server/core(源码),但容器里只有编译后的 dist,
-# src 目录根本不存在 → 必须用 production-runtime 专用 tsconfig(paths 指 dist),
-# 复制时改名为 tsconfig.json(tsx 默认读 cwd/tsconfig.json)。
+# tsx ESM hook 加载 AI 生成的 .ts 文件时,从 cwd/tsconfig.json 读 @core/* paths alias。
+# 容器只有 dist 没有 src,所以 paths 必须指 dist — 用 tsconfig.runtime.json 改名复制。
 COPY --from=builder /app/tsconfig.runtime.json ./tsconfig.json
 
 # Writable runtime directories (replaced by mounted volumes in docker-compose).

@@ -230,9 +230,7 @@ export class BaseModel {
     const cleanData = { ...data };
 
     // id 是 AUTOINCREMENT 主键,用户不能传(否则覆盖 lastInsertRowid 语义)。
-    // 其它字段一律透传:框架不再对 created_at/updated_at/createdAt/updatedAt 做特殊
-    // 处理。用户/AI 想要时间戳:要么 schema.sql 写 DEFAULT CURRENT_TIMESTAMP / DEFAULT
-    // (datetime('now')) 由 DB 管;要么 controller create 时显式赋值。框架不替用户决策。
+    // 其它字段一律透传,时间戳由 schema DEFAULT 或 controller 自己负责。
     delete cleanData.id;
 
     // Auto-validate against bound meta (no-op if .withMeta() was never called)
@@ -276,9 +274,8 @@ export class BaseModel {
     const numId = typeof id === 'string' ? Number(id) : id;
     const cleanData = { ...data };
 
-    // 只剥 id(主键不允许 update)。其它字段全透传 — 框架不再硬塞 updated_at。
-    // 用户/AI 想要"更新时自动刷新时间戳":controller update 时显式赋 updatedAt,
-    // 或在 schema.sql 加 UPDATE TRIGGER。框架不替用户决策。
+    // 主键 id 不允许 update,其它字段全透传。时间戳刷新交给 controller 显式赋值
+    // 或 schema UPDATE TRIGGER。
     delete cleanData.id;
 
     // Auto-validate (partial-merge with existing row so cross-field rules see
@@ -349,19 +346,13 @@ export class BaseModel {
     return this.delete(n);
   }
 
-  // ==================== Raw SQL aliases ====================
-  // AI 训练数据里 ORM 通常叫 rawQuery/query/exec,凭习惯写 `model.rawQuery(sql, params)`
-  // 而框架原始 API 叫 `raw()` → controller 必报 "rawQuery is not a function" 500。
-  // 这跟 list/getById/remove 同种"框架适应 AI 写法"的别名,不是新增能力。
-  // 注:userId 注入还是依赖外层 mockContext,这些 raw 调用不绕过沙箱(只是绑同一张
-  // 物理表,因为 BaseModel.raw 直接走 sqlite.prepare,sql 里要写明 mock__{userId}_xxx)。
+  // Raw SQL aliases — 适配 AI 常写的 rawQuery/query 命名,委托给 raw()。
+  // 注:userId 注入依赖外层 mockContext,SQL 里表名要写明 mock__{userId}_xxx。
 
-  /** Alias for raw — AI 常写 `model.rawQuery(sql, params)`,等同于 raw()。 */
   rawQuery(sql: string, params: unknown[] = []): unknown[] {
     return this.raw(sql, params);
   }
 
-  /** Alias for raw — AI 常写 `model.query(sql, params)`,等同于 raw()。 */
   query(sql: string, params: unknown[] = []): unknown[] {
     return this.raw(sql, params);
   }

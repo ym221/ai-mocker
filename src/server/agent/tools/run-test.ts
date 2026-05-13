@@ -1,5 +1,5 @@
 import { resolve, join } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { pathToFileURL } from 'url';
 import { resetTests, runAllTests } from '../../core/test-runner.js';
 import { mockContext } from '../../core/base-model.js';
@@ -7,6 +7,17 @@ import { sqlite } from '../../core/database.js';
 import { getEntities } from '../../core/meta-schema.js';
 
 const GENERATED_DIR = resolve('generated');
+
+/** 抽取 schema.sql 里的 INSERT 语句,用于 run_test 清表后重灌种子。
+ *  按 ';' 切语句,只保留 INSERT INTO 开头的;假设 VALUES 内不嵌套真实分号。 */
+function extractInsertStatements(sql: string): string[] {
+  return sql
+    .replace(/--[^\n]*/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split(';')
+    .map(s => s.trim())
+    .filter(s => /^INSERT\s+INTO\s+/i.test(s));
+}
 
 export async function runTest(userId: number, moduleName: string): Promise<{
   passed: number;
@@ -19,26 +30,37 @@ export async function runTest(userId: number, moduleName: string): Promise<{
     throw new Error(`Test file not found: ${moduleName}/test.ts`);
   }
 
-  // Clear test residual data
+  // 每次跑测试前 reset 到种子态:清表 + 重置自增 + 重放 schema.sql 的 INSERT。
+  // 让 spec 要求的"种子数据 N 条"在测试中始终可见,test case "列表 ≥1 条" 可重复通过。
   const metaPath = join(GENERATED_DIR, String(userId), moduleName, '_meta.json');
+  const schemaPath = join(GENERATED_DIR, String(userId), moduleName, 'schema.sql');
   if (existsSync(metaPath)) {
     try {
-      const { readFileSync } = await import('fs');
       const meta = JSON.parse(readFileSync(metaPath, 'utf-8'));
       for (const entity of getEntities(meta)) {
-        // Prefer the declared tableName; fall back to the `mock__<name>` convention
-        // for legacy modules that omitted it.
         const bare = (entity.tableName || `mock__${entity.name}`).replace(/^mock__/, '');
         const tableName = `mock__${userId}_${bare}`;
         try {
           sqlite.exec(`DELETE FROM \`${tableName}\``);
-        } catch {
-          // Table might not exist yet
+          try { sqlite.exec(`DELETE FROM sqlite_sequence WHERE name = '${tableName}'`); }
+          catch { /* sqlite_sequence 可能不存在 */ }
+        } catch { /* 表还没建 */ }
+      }
+
+      if (existsSync(schemaPath)) {
+        const schemaContent = readFileSync(schemaPath, 'utf-8');
+        for (const stmt of extractInsertStatements(schemaContent)) {
+          // userId 前缀注入,与 write-file.ts 一致
+          const injected = stmt
+            .replace(/`mock__([a-zA-Z0-9_]+)`/g, `\`mock__${userId}_$1\``)
+            .replace(/(?<![`\w])mock__([a-zA-Z0-9_]+)(?![`\w])/g, `mock__${userId}_$1`);
+          try { sqlite.exec(injected); }
+          catch (err) {
+            console.warn(`[run_test] seed re-insert failed for ${moduleName}: ${(err as Error).message}`);
+          }
         }
       }
-    } catch {
-      // Non-critical
-    }
+    } catch { /* 非关键路径 */ }
   }
 
   // Reset test registry

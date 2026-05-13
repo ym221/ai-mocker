@@ -1,17 +1,11 @@
 import { z } from 'zod';
 import { tool } from 'ai';
 
-/**
- * LLM 极度常见的反模式:把复合参数(array/object)整个 JSON.stringify 后传过来。
- * 例:write_files.files 期望 array,LLM 传 `"[{\"path\":\"...\",\"content\":...}]"`。
- * 严格 zod schema 直接拒,LLM 不知道为啥败,反复 retry 浪费数分钟。
- *
- * 这个 preprocess 在 zod 校验前先 JSON.parse string,失败就回退原值让 zod 给出
- * 正常报错。跟 #12 (content union) 是同种"业务表达层松绑"理念,只是放在外层。
- */
+/** LLM 常把复合参数(array/object)整个 JSON.stringify 后传过来 — 在 zod 校验前
+ *  先 JSON.parse,失败回退原值让 zod 给出正常报错。 */
 function parseIfStringified<T>(val: unknown): T | unknown {
   if (typeof val === 'string') {
-    try { return JSON.parse(val); } catch { /* fall through to original */ }
+    try { return JSON.parse(val); } catch { /* not JSON, pass through */ }
   }
   return val;
 }
@@ -60,9 +54,16 @@ function classifyFailure(toolName: string, result: any): { cause: RepairCause; t
     }
     return { cause, targetFiles, snippet: msg };
   }
-  // run_test failure: result format = { success: bool, ... } or has failures
+  // run_test result shape: { passed: number, total: number, failures: [{name, error}] }
+  // failures 是数组,用 .length 判断;同时兼容 passed<total / results[].passed 形状。
   if (toolName === 'run_test') {
-    const failed = result.passed === false || result.failures > 0 || (Array.isArray(result.results) && result.results.some((r: any) => r?.passed === false));
+    const failuresCount = Array.isArray(result.failures)
+      ? result.failures.length
+      : (typeof result.failures === 'number' ? result.failures : 0);
+    const failed = failuresCount > 0
+      || (typeof result.passed === 'number' && typeof result.total === 'number' && result.passed < result.total)
+      || result.passed === false
+      || (Array.isArray(result.results) && result.results.some((r: any) => r?.passed === false));
     if (failed) {
       const snippet = JSON.stringify(result).slice(0, 500);
       return { cause: 'run_test_failed', targetFiles: ['test.ts', 'controller.ts'], snippet };
@@ -186,16 +187,14 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         + 'Each file\'s `content` accepts string OR object/array (auto-stringified). '
         + '`files` itself also accepts stringified JSON (framework auto-parses).',
       parameters: z.object({
-        // files 外层用 preprocess 接 stringified JSON array — LLM 极易把整个数组
-        // stringify 后传过来,严格 z.array 会拒绝,框架自动 parse 一次救活。
         files: z.preprocess(
           parseIfStringified,
           z.array(z.object({
             path: z.string().describe('File path relative to generated/{userId}/, e.g., "order/_meta.json"'),
             content: z.union([z.string(), z.record(z.string(), z.unknown()), z.array(z.unknown())])
-              .describe('File content. Plain string OR JSON object/array (auto-stringified).'),
+              .describe('File content. String OR JSON object/array (auto-stringified).'),
           })).min(1),
-        ).describe('Array of { path, content }. Keep ordering meaningful: schema.sql should come before _meta.json. Accepts either a real array or a stringified JSON array.'),
+        ).describe('Array of { path, content }. Schema.sql should come before _meta.json. Accepts either a real array or a stringified JSON array.'),
       }),
       execute: async ({ files }) => {
         const normalized = (files ?? []).map((f) => ({
@@ -246,8 +245,6 @@ export function buildTools(userId: number, runner?: ChatRunner) {
       parameters: z.object({
         action: z.enum(['list', 'insert', 'update', 'delete', 'batch_delete', 'clear', 'bulk_generate']).describe('Operation to perform'),
         moduleName: z.string().describe('Module name'),
-        // 所有复合参数(object/array)外层 preprocess,LLM 把 data:{...} 整个
-        // stringify 成 '{"k":"v"}' 是极常见行为,严格 z.record 会拒。
         data: z.preprocess(parseIfStringified, z.record(z.string(), z.unknown()).optional())
           .describe('Record data (for insert / update — partial fields ok for update). Accepts object or stringified JSON object.'),
         id: z.number().optional().describe('Record id (for update / delete)'),

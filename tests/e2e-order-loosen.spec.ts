@@ -1,17 +1,13 @@
 /**
- * Step-Loosen-1 验收 — 用"订单管理"业务端到端验证框架松绑后
- *   从 MCP 对话 → AI 生成完整模块 → 调用 mock 接口 全链路。
+ * 用"订单管理"业务端到端验证从 MCP 对话 → AI 生成完整模块 → 调用 mock 接口 全链路。
  *
- * 设计目标:
- *   - 验证 #11 (BaseModel 不再硬塞系统字段) 在真实 LLM 路径上无副作用
- *   - 验证 #12 (write_file/write_files content union) 不再引发 zod 首次失败
- *   - 验证 finalize 守门(5 文件 + run_test failures=0 + controller probe)
- *     全绿才放行
- *   - 验证生成出的 mock 接口能被实际调用,响应结构与 spec 对得上
+ * 覆盖:
+ *   - BaseModel create/update 不强制 created_at/updated_at(spec 没要求就不加)
+ *   - write_file / write_files content 接 string|object|array
+ *   - finalize 守门:5 文件齐 + run_test failures=0 + controller probe 全过才放行
+ *   - 生成的 mock 接口实际可调用,响应结构与 spec 对得上
  *
- * 命名约定:
- *   tag = @loosen-e2e — 主验收
- *   tag = @real-llm   — 复用 real-llm-e2e 同款过滤约定,默认 CI 跑
+ * tag @real-llm 复用 real-llm-e2e 过滤约定。
  */
 import { test, expect } from '@playwright/test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -85,7 +81,7 @@ async function runUntilDone(
 
 test.beforeAll(async () => { await waitForBackend(); });
 
-test.describe('@real-llm @loosen-e2e Step-Loosen-1 验收 — 订单管理 MCP→生成→调用 全链路', () => {
+test.describe('@real-llm 订单管理 MCP→生成→调用 全链路', () => {
   const MOD = 'order_loosen';
 
   test('LOOSEN-E01 通过 MCP 生成订单管理模块,5 文件齐全 + health=healthy', async () => {

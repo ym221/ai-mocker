@@ -1,0 +1,16 @@
+{
+  "_comment": "Production Docker 容器运行时用 tsconfig。Dockerfile 复制时改名为 tsconfig.json,tsx ESM hook 在 cwd 读取它解析 @core/* paths。【不 extends ./tsconfig.json】因为重命名后会变成自我引用造成无限递归。开发期改 paths 时必须同步改此文件 dist 路径。",
+  "compilerOptions": {
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": {
+      "@core/*": ["dist/server/core/*"]
+    }
+  },
+  "exclude": ["node_modules", "dist"]
+}

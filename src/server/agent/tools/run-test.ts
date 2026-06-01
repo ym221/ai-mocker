@@ -69,9 +69,25 @@ export async function runTest(userId: number, moduleName: string): Promise<{
   // Dynamic import with cache busting
   const fileUrl = pathToFileURL(testPath).href + `?t=${Date.now()}`;
 
-  // Run within mockContext so BaseModel knows the userId
-  return mockContext.run({ userId }, async () => {
-    await import(fileUrl);
-    return runAllTests();
-  });
+  // Step-Workflow-1 fix:AI 经常在 test.ts 自写 fetch(url) 用相对路径(忽略框架的
+  // request helper),Node fetch 拒绝相对 URL → "Failed to parse URL"。临时 wrap
+  // globalThis.fetch:遇到以 / 开头的 url 自动加 base,绝对 URL 透传。
+  const PORT = Number(process.env.PORT) || 3000;
+  const BASE_URL = `http://127.0.0.1:${PORT}`;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input: any, init?: any) => {
+    if (typeof input === 'string' && input.startsWith('/')) {
+      return originalFetch(BASE_URL + input, init);
+    }
+    return originalFetch(input, init);
+  }) as typeof globalThis.fetch;
+
+  try {
+    return await mockContext.run({ userId }, async () => {
+      await import(fileUrl);
+      return runAllTests();
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }

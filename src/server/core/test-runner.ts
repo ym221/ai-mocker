@@ -53,24 +53,43 @@ export async function runAllTests(): Promise<TestResult> {
   return { passed, total: testCases.length, failures };
 }
 
-/** Assertion utilities */
+/** Assertion utilities — Step-Workflow-1:加 jest/chai 风格别名,让 AI 各种自然
+ *  写法(truthy/equal/notEqual/deepEqual)都能跑通,而不是卡在 "assert.truthy is
+ *  not a function" 这种纯命名层的报错上 */
+const _ok = (value: unknown, message?: string) => {
+  if (!value) throw new Error(message || `Expected truthy, got ${JSON.stringify(value)}`);
+};
+const _not = (value: unknown, message?: string) => {
+  if (value) throw new Error(message || `Expected falsy, got ${JSON.stringify(value)}`);
+};
+const _eq = (actual: unknown, expected: unknown, message?: string) => {
+  if (actual !== expected) {
+    throw new Error(message || `Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+};
+const _notEq = (actual: unknown, expected: unknown, message?: string) => {
+  if (actual === expected) {
+    throw new Error(message || `Expected not equal to ${JSON.stringify(expected)}, but got the same`);
+  }
+};
+const _exists = (value: unknown, message?: string) => {
+  if (value === null || value === undefined) {
+    throw new Error(message || `Expected non-null/undefined, got ${JSON.stringify(value)}`);
+  }
+};
+const _deepEq = (actual: unknown, expected: unknown, message?: string) => {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(message || `Expected deep-equal ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+};
+
 export const assert = {
-  ok(value: unknown, message?: string) {
-    if (!value) throw new Error(message || `Expected truthy, got ${JSON.stringify(value)}`);
-  },
-  not(value: unknown, message?: string) {
-    if (value) throw new Error(message || `Expected falsy, got ${JSON.stringify(value)}`);
-  },
-  eq(actual: unknown, expected: unknown, message?: string) {
-    if (actual !== expected) {
-      throw new Error(message || `Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-    }
-  },
-  exists(value: unknown, message?: string) {
-    if (value === null || value === undefined) {
-      throw new Error(message || `Expected non-null/undefined, got ${JSON.stringify(value)}`);
-    }
-  },
+  ok: _ok, truthy: _ok, true: _ok, isTrue: _ok,
+  not: _not, falsy: _not, false: _not, isFalse: _not,
+  eq: _eq, equal: _eq, equals: _eq, strictEqual: _eq,
+  notEq: _notEq, notEqual: _notEq,
+  exists: _exists, defined: _exists, notNull: _exists,
+  deepEqual: _deepEq, deepEq: _deepEq,
 };
 
 /** HTTP request utilities */

@@ -28,6 +28,8 @@ import { manageData } from './tools/manage-data.js';
 import { listModules } from './tools/list-modules.js';
 import { deleteModule } from './tools/delete-module.js';
 import { fetchModuleTemplate } from './tools/get-module-template.js';
+import { emitParams, paramsSchema } from './tools/emit-params.js';
+import { patchFile } from './tools/patch-file.js';
 import { runSerialized } from './lib/session-mutex.js';
 import { emitToolTiming, emitRepair, type RepairCause } from '../core/observability.js';
 import type { ChatRunner } from './chat-runner.js';
@@ -105,8 +107,10 @@ function classifyFailure(toolName: string, result: any): { cause: RepairCause; t
  * still belong to the workflow tail, kept available.
  */
 const NUDGE_TOOL_ALLOWLIST = new Set([
+  'emit_params',   // Step-Workflow-1:nudge 时如果还没 emit_params,允许补
   'write_file',
   'write_files',
+  'patch_file',
   'read_file',
   'run_test',
   'manage_data',
@@ -122,6 +126,40 @@ export function buildToolsForNudge(userId: number, runner?: ChatRunner) {
     if (NUDGE_TOOL_ALLOWLIST.has(k)) filtered[k] = v;
   }
   return filtered as ReturnType<typeof buildTools>;
+}
+
+/**
+ * Step-Workflow-1:per-cause repair cap 触发后用的只读工具集,只允许 AI 输出
+ * 文字总结/读取自己之前写过的文件。彻底禁止再写 / 再测,强制让 AI 收尾。
+ */
+const READ_ONLY_TOOL_ALLOWLIST = new Set([
+  'read_file',
+  'list_modules',
+]);
+
+export function buildToolsForReadOnly(userId: number, runner?: ChatRunner) {
+  const all = buildTools(userId, runner);
+  const filtered: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(all)) {
+    if (READ_ONLY_TOOL_ALLOWLIST.has(k)) filtered[k] = v;
+  }
+  return filtered as ReturnType<typeof buildTools>;
+}
+
+/**
+ * Step-Workflow-1 gate:write_files / write_file / run_test 等改写类工具
+ * 必须在 emit_params 之后才能调用。返 null = 通过,返对象 = reject 结果。
+ */
+function paramsGate(runner: ChatRunner | undefined, toolName: string) {
+  if (!runner) return null;  // 单测/无 runner 上下文豁免
+  if (runner.hasParams()) return null;
+  return {
+    success: false,
+    error:
+      `[阶段错误] 调用 ${toolName} 之前必须先调用 emit_params 输出本模块的结构化参数。\n`
+      + `框架按强制工作流执行:set_module_intent → emit_params → write_files → run_test → patch_file(修复)。\n`
+      + `请先调 emit_params({ moduleName, fieldNaming, envelope, entities, endpoints, ... }),框架校验通过后才能继续。`,
+  };
 }
 
 export function buildTools(userId: number, runner?: ChatRunner) {
@@ -210,11 +248,32 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         return { success: true, ...result };
       },
     }),
+    emit_params: tool({
+      description:
+        '【强制工作流第 2 步】set_module_intent 之后,你必须先调用本工具,把本次模块的"结构化参数"emit 出来。\n'
+        + '框架收到后会:(a) zod schema 强校验;(b) 跨字段一致性校验(端点 entity 是否在 entities 里等);(c) 存到 session 内存,作为后续 write_* / run_test 的前置条件。\n'
+        + '不调用 emit_params 就直接 write_files,框架会 reject。\n\n'
+        + '你应该一次性把 spec 里所有信息都抽出来:\n'
+        + '  - fieldNaming:snake_case / camelCase / PascalCase(看 spec 用什么风格)\n'
+        + '  - envelope.default:默认响应信封(successFlag/dataField 字段名,如 { Success, Data, Message } 还是 { success, data, message })\n'
+        + '  - envelope.exceptions:某些端点用不同信封时列出(如 spec 说 "API-007 用 IsSuccess")\n'
+        + '  - entities:所有实体 + 主键 + 字段 + seedCount(种子数,spec 提了就填)\n'
+        + '  - endpoints:每个端点的 method/path/type/entity + customLogic(纯 CRUD 留空,非 CRUD 用一句话描述业务逻辑)\n'
+        + '  - pagination(可选):分页字段名 + 位置(flat 顶层 vs nested 包在 paginationInfo 里)',
+      parameters: paramsSchema,
+      execute: async (input) => {
+        const result = emitParams(input);
+        if (!result.success) return result;
+        if (runner) runner.setParams(result.params);
+        return result;
+      },
+    }),
     write_file: tool({
       description:
         'Write ONE file to generated/{userId}/. Use this when you cannot emit nested array schemas (small models) or when you want to write files one at a time for better control. '
         + 'SQL files auto-execute; _meta.json auto-syncs to modules table. For efficient multi-file writes (5-6 files at once), prefer `write_files` — but if you struggle with its nested schema, fall back to calling `write_file` once per file. '
-        + '`content` accepts string OR object/array (will be auto-JSON.stringify-ed) — emit native JSON for _meta.json if more natural.',
+        + '`content` accepts string OR object/array (will be auto-JSON.stringify-ed) — emit native JSON for _meta.json if more natural.\n\n'
+        + '**禁用条件**:进入修复阶段(run_test 已调过)后,本工具被锁定。修 bug 必须用 patch_file 局部修改。',
       parameters: z.object({
         path: z.string().describe('File path relative to generated/{userId}/, e.g., "order/_meta.json"'),
         // content 接受 string | object | array:LLM 写 _meta.json 时经常自然 emit object,
@@ -223,11 +282,25 @@ export function buildTools(userId: number, runner?: ChatRunner) {
           .describe('File content. Plain string OR JSON object/array (auto-stringified).'),
       }),
       execute: async ({ path, content }) => {
+        const gateRes = paramsGate(runner, 'write_file');
+        if (gateRes) return gateRes;
+        // Step-Workflow-1:进入修复阶段(run_test 已跑过)后,write_file 整覆盖被锁
+        if (runner?.isInRepairPhase()) {
+          return {
+            success: false,
+            error:
+              '[阶段错误] 模块已进入修复阶段(run_test 已调用过)。**禁止用 write_file 整覆盖修复**,必须用 patch_file 做局部修改。\n'
+              + '调用格式:patch_file({ path, oldText: <要替换的精确片段>, newText: <新片段>, reason: <说明改什么/为什么> })\n'
+              + '单次 patch 上限:diff size ≤ 文件总字符数 30%,newText/oldText 比 ∈ [0.3, 3.0]。',
+          };
+        }
         const text = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
         const finalPath = autoPrefixModulePath(path, runner?.getModuleName());
-        return instrument('write_file', { path: finalPath, contentBytes: text.length }, () =>
+        const result = await instrument('write_file', { path: finalPath, contentBytes: text.length }, () =>
           serialize(() => writeFile(userId, finalPath, text)),
         );
+        if (runner) runner.markFirstWriteDone();
+        return result;
       },
     }),
 
@@ -250,16 +323,28 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         ).describe('Array of { path, content }. Schema.sql should come before _meta.json. Accepts either a real array or a stringified JSON array.'),
       }),
       execute: async ({ files }) => {
+        const gateRes = paramsGate(runner, 'write_files');
+        if (gateRes) return gateRes;
+        if (runner?.isInRepairPhase()) {
+          return {
+            success: false,
+            error:
+              '[阶段错误] 模块已进入修复阶段(run_test 已调用过)。**禁止用 write_files 整覆盖修复**,必须用 patch_file 做局部修改。\n'
+              + 'patch_file({ path, oldText, newText, reason }) — 单次 diff ≤ 30% 文件,newText/oldText 比 ∈ [0.3, 3.0]。',
+          };
+        }
         const moduleName = runner?.getModuleName();
         const normalized = (files ?? []).map((f) => ({
           path: autoPrefixModulePath(f.path, moduleName),
           content: typeof f.content === 'string' ? f.content : JSON.stringify(f.content, null, 2),
         }));
-        return instrument(
+        const result = await instrument(
           'write_files',
           { fileCount: normalized.length, paths: normalized.slice(0, 8).map((f) => f.path) },
           () => serialize(() => writeFiles(userId, { files: normalized })),
         );
+        if (runner) runner.markFirstWriteDone();
+        return result;
       },
     }),
 
@@ -273,13 +358,41 @@ export function buildTools(userId: number, runner?: ChatRunner) {
       },
     }),
 
+    patch_file: tool({
+      description:
+        '【修复阶段专用】对已存在文件做精确局部修改。强制"只改不重写":\n'
+        + '  - oldText 必须精确匹配文件中**唯一**一段(0/2+ 处都 reject)\n'
+        + '  - newText/oldText 字符数比 ∈ [0.3, 3.0],单次 diff ≤ 30% 文件总字符\n'
+        + '  - reason 必填,说明改什么 + 为什么\n'
+        + '修 SQL 时框架会重新 exec(CREATE IF NOT EXISTS + INSERT OR IGNORE 是幂等的);修 _meta.json 会重新合约校验 + 同步到 modules 表。\n'
+        + '若 patch 超过比例上限,意味着思路根本变了 — 拆成多次小 patch,每次只动一处。',
+      parameters: z.object({
+        path: z.string().describe('文件路径(同 write_file 规则,如 "order/controller.ts")'),
+        oldText: z.string().describe('要替换的精确片段(包括空格/换行)。必须在文件中唯一出现 1 次'),
+        newText: z.string().describe('替换后的新片段'),
+        reason: z.string().describe('修改原因,≥ 5 字符。例:"修复 BaseModel 不接受对象 orderBy 改为字符串"'),
+      }),
+      execute: async ({ path, oldText, newText, reason }) => {
+        const gateRes = paramsGate(runner, 'patch_file');
+        if (gateRes) return gateRes;
+        const finalPath = autoPrefixModulePath(path, runner?.getModuleName());
+        return instrument('patch_file', { path: finalPath, oldLen: oldText.length, newLen: newText.length, reason: reason.slice(0, 60) }, () =>
+          serialize(() => patchFile(userId, { path: finalPath, oldText, newText, reason })),
+        );
+      },
+    }),
+
     run_test: tool({
       description: 'Execute test.ts for a module. Clears test data first, then runs all test cases.',
       parameters: z.object({
         moduleName: z.string().describe('Module name to test'),
       }),
-      execute: async ({ moduleName }) =>
-        instrument('run_test', { moduleName }, () => serialize(() => runTest(userId, moduleName))),
+      execute: async ({ moduleName }) => {
+        const gateRes = paramsGate(runner, 'run_test');
+        if (gateRes) return gateRes;
+        if (runner) runner.bumpRunTestCalls();
+        return instrument('run_test', { moduleName }, () => serialize(() => runTest(userId, moduleName)));
+      },
     }),
 
     manage_data: tool({

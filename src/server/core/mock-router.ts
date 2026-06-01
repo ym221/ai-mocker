@@ -259,27 +259,33 @@ export default async function mockRouter(app: FastifyInstance) {
         // 这是 LLM 默认会写的 express-style 签名(claude-sonnet 等强模型实测都用这种),
         // 此前传单参数(query / id / body)的设计跟现代 LLM 输出对不齐,run_test 必挂。
         const req = { body, query, params: matchedParams };
-        switch (matchedEndpoint!.type) {
-          case 'list':
-            return ctrl.list(req);
-          case 'detail':
-            return ctrl.getById(req);
-          case 'create':
-            return ctrl.create(req);
-          case 'update':
-            return ctrl.update(req);
-          case 'delete':
-            return ctrl.remove(req);
-          case 'custom': {
-            const handlerName = matchedEndpoint!.handler || matchedEndpoint!.name;
-            if (!ctrl[handlerName]) {
-              throw new Error(`Handler "${handlerName}" not found in controller`);
-            }
-            return ctrl[handlerName](req);
+
+        // Step-Workflow-1:fallback handler 推断 — AI 经常用命名导出(如 `search`/
+        // `ownerOptions`)但 _meta.endpoints[i].controller 没填,导致类型默认 dispatch
+        // 找不到 ctrl.list/ctrl.getById。改为按 type + 路径推断候选名,逐个尝试。
+        const lastSeg = matchedEndpoint!.path.split('/').filter(s => s && !s.startsWith(':') && !s.startsWith('{')).pop() || '';
+        const pathCamel = lastSeg.replace(/[_-]+([a-zA-Z])/g, (_, c) => c.toUpperCase()).replace(/^[A-Z]/, m => m.toLowerCase());
+
+        const candidatesByType: Record<string, string[]> = {
+          list: [pathCamel, 'list', 'search', 'findAll', 'list' + pathCamel.charAt(0).toUpperCase() + pathCamel.slice(1)].filter(Boolean),
+          detail: [pathCamel, 'getById', 'detail', 'findOne', 'get' + pathCamel.charAt(0).toUpperCase() + pathCamel.slice(1)].filter(Boolean),
+          create: [pathCamel, 'create', 'add', 'insert'].filter(Boolean),
+          update: [pathCamel, 'update', 'edit'].filter(Boolean),
+          delete: [pathCamel, 'remove', 'delete', 'del'].filter(Boolean),
+          custom: [matchedEndpoint!.handler || matchedEndpoint!.name || '', pathCamel].filter(Boolean),
+        };
+        const candidates = candidatesByType[matchedEndpoint!.type] ?? [pathCamel];
+        for (const name of candidates) {
+          if (name && typeof ctrl[name] === 'function') {
+            return ctrl[name](req);
           }
-          default:
-            throw new Error(`Unknown endpoint type: ${matchedEndpoint!.type}`);
         }
+        const available = Object.keys(ctrl).filter(k => typeof ctrl[k] === 'function').join(', ') || '(none)';
+        throw new Error(
+          `Cannot dispatch endpoint ${matchedEndpoint!.method.toUpperCase()} ${matchedEndpoint!.path} (type=${matchedEndpoint!.type}). `
+          + `Tried handlers: [${candidates.join(', ')}]. Available exports: [${available}]. `
+          + `Set _meta.endpoints[i].controller="<exportName>" to bind explicitly, or rename your export to match one of the tried names.`,
+        );
       });
 
       // ========== Response processing (priority order) ==========

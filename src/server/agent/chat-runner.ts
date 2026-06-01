@@ -21,7 +21,7 @@ import { computeModuleHealth, probeControllerLoadable } from '../core/module-hea
 import { runSmokeTest, type SmokeResult } from '../core/smoke-test.js';
 import { resolveDefaultProviderForUser, findAccessibleProvider } from '../core/provider-resolver.js';
 import { buildSystemPrompt } from './system-prompt.js';
-import { buildTools, buildToolsForNudge } from './tool-registry.js';
+import { buildTools, buildToolsForNudge, buildToolsForReadOnly, isRepairCapReached, getRepairAttempts } from './tool-registry.js';
 import { ThinkingParser } from './thinking-adapter.js';
 import { buildProviderOptions, reportCacheSupport } from './prompt-cache.js';
 import { decideWatchdog, buildNudgeMessage } from './watchdog.js';
@@ -156,6 +156,24 @@ export class ChatRunner {
   /** 当前 session 已声明的模块名,write_file/write_files 用来自动补 path 前缀。 */
   getModuleName(): string | null { return this.moduleIntent?.moduleName ?? null; }
 
+  // ----- Step-Workflow-1 模块参数(emit_params 阶段产出)-----
+
+  /** AI 通过 emit_params 工具声明的本模块结构化参数。后续 write 工具用它做 gate + 校验 */
+  private params: unknown | null = null;
+  /** Per-session run_test 调用次数,用来判断"修复阶段"是否开始 */
+  private runTestCallCount = 0;
+  /** 首次 write_files/write_file 阶段标记,patch_file gate 判断用 */
+  private firstWriteCompleted = false;
+
+  hasParams(): boolean { return this.params != null; }
+  getParams(): unknown | null { return this.params; }
+  setParams(params: unknown): void { this.params = params; }
+
+  bumpRunTestCalls(): number { return ++this.runTestCallCount; }
+  getRunTestCallCount(): number { return this.runTestCallCount; }
+  markFirstWriteDone(): void { this.firstWriteCompleted = true; }
+  isInRepairPhase(): boolean { return this.runTestCallCount > 0; }
+
   // 跟踪本会话内最后一次 run_test 的结果,供 finalize 'done' 前的软告警门用:
   //   -1 = 还没跑过 run_test
   //   0  = 跑过且全 pass
@@ -164,6 +182,9 @@ export class ChatRunner {
   // Step-Loosen Phase 2:这个值不再硬阻断 finalize('done'),只作为 quality.runTestCases 的软信号。
   private lastRunTestFailures = -1;
   private lastRunTestTotal = 0;
+  // Step-Workflow-1 Task 5:跟踪本会话见过的最大 test.total,用于反作弊检测
+  // AI 若把 test.total 从 16 删到 8,peak=16 ≠ last=8 → 标记 quality.cheated=true
+  private peakRunTestTotal = 0;
 
   // Step-Loosen Phase 2:收集本会话的软警告(run_test 部分失败 / smoke skipReason 等),
   // 通过 quality 字段透传给调用方 AI 让它判断要不要进一步修。
@@ -554,6 +575,12 @@ export class ChatRunner {
         failures: this.lastRunTestFailures,
       };
     }
+    // Step-Workflow-1 Task 5:作弊标记 — 看 AI 是否减少了 test case 总数
+    if (this.peakRunTestTotal > 0 && this.lastRunTestTotal < this.peakRunTestTotal) {
+      quality.cheated = true;
+      quality.peakRunTestTotal = this.peakRunTestTotal;
+      quality.finalRunTestTotal = this.lastRunTestTotal;
+    }
     if (this.softWarnings.length > 0) {
       quality.warnings = [...this.softWarnings];
     }
@@ -883,6 +910,7 @@ export class ChatRunner {
 
       const tools = buildTools(userId, this);
       const nudgeTools = buildToolsForNudge(userId, this);
+      const readOnlyTools = buildToolsForReadOnly(userId, this);
       const parser = new ThinkingParser();
       const collectedToolCalls = new Map<string, { name: string; args: unknown }>();
       const affectedModules = new Set<string>();
@@ -907,17 +935,27 @@ export class ChatRunner {
       // ===== Stream consumer (extracted so we can re-run for watchdog nudge) =====
       // Step-Loosen Phase 2/4 强化:nudge 时只暴露写工具 + read_file,杜绝弱模型
       // 反复调 set_module_intent / get_module_template 的 loop。
-      const consumeOneStream = async (messagesForThisAttempt: CoreMessage[], opts?: { restrictedToWrite?: boolean }) => {
+      // Step-Workflow-1 Task 3:restrictedToReadOnly 用于 per-cause cap 触发后强制收尾。
+      const consumeOneStream = async (
+        messagesForThisAttempt: CoreMessage[],
+        opts?: { restrictedToWrite?: boolean; restrictedToReadOnly?: boolean }
+      ) => {
         const roundIndex = ++llmRoundCounter;
         const roundStart = Date.now();
         let firstPartAt: number | null = null;
         const llmThinkingStart = emitPhaseStart(this.sessionId, 'llm_thinking', { round: roundIndex });
 
+        const activeTools = opts?.restrictedToReadOnly
+          ? readOnlyTools
+          : opts?.restrictedToWrite
+          ? nudgeTools
+          : tools;
+
         const result = streamText({
           model,
           system: systemPrompt + extraSystemSuffix,
           messages: messagesForThisAttempt,
-          tools: opts?.restrictedToWrite ? nudgeTools : tools,
+          tools: activeTools,
           stopWhen: stepCountIs(Number(process.env.CHAT_MAX_STEPS ?? 40)),
           abortSignal: abortController.signal,
           ...(providerOptions ? { providerOptions } : {}),
@@ -975,13 +1013,29 @@ export class ChatRunner {
               const truncated = resultStr.length > 500 ? resultStr.slice(0, 500) + '...' : resultStr;
               const callId = part.toolCallId || '';
               const callInfo = collectedToolCalls.get(callId);
-              // 记录最后一次 run_test 结果,finalize 'done' guard 用 — AI 不能在 failures>0 时声明完成。
-              // raw 形如 { passed, total, failures: [...] }
+              // 记录最后一次 run_test 结果。Step-Loosen Phase 2:此值不再硬阻断 finalize,只作软信号。
+              // Step-Workflow-1 Task 5:跟踪 peakTotal,检测 AI 偷偷删 test case 作弊
               if ((callInfo?.name === 'run_test' || part.toolName === 'run_test')
                 && raw && typeof raw === 'object') {
                 const r = raw as { failures?: unknown; total?: unknown };
                 this.lastRunTestFailures = Array.isArray(r.failures) ? r.failures.length : 0;
                 this.lastRunTestTotal = typeof r.total === 'number' ? r.total : 0;
+                if (this.lastRunTestTotal > this.peakRunTestTotal) {
+                  this.peakRunTestTotal = this.lastRunTestTotal;
+                } else if (this.lastRunTestTotal < this.peakRunTestTotal) {
+                  const dropped = this.peakRunTestTotal - this.lastRunTestTotal;
+                  const msg = `检测到 test.total 从 ${this.peakRunTestTotal} 降到 ${this.lastRunTestTotal}(-${dropped})— 怀疑删 case 作弊`;
+                  if (!this.softWarnings.some(w => w.includes('test.total'))) {
+                    this.softWarnings.push(msg);
+                  }
+                  // 注入下一轮可见的提示,要求 AI 恢复 test case
+                  this.appendEvent('thinking', {
+                    content:
+                      `[框架警告] 你把 test case 总数从 ${this.peakRunTestTotal} 减到 ${this.lastRunTestTotal}(删了 ${dropped} 个)。\n`
+                      + `这违反"禁止减少 test case 总数"约束,quality.cheated 已标记。\n`
+                      + `必须立即恢复删掉的 case(可以新增,可以修正,不能删)。如果某个 case 写错了,改正它而不是删它。`,
+                  });
+                }
               }
               this.appendEvent('tool_result', {
                 callId,
@@ -1033,8 +1087,41 @@ export class ChatRunner {
         maxNudge: NUDGE_MAX,
       });
 
+      // Step-Workflow-1 Task 3:per-cause repair hard cap.
+      // 每轮 consumeOneStream 后检查 — 任一 cause 累计达上限,注入 system 终止指令,
+      // 给 AI 一次机会"知错就收"并自然结束(输出文字总结),框架透传未解决问题给调用方。
+      const REPAIR_CAUSES_TRACKED = ['run_test_failed', 'sql_exec_failed', 'meta_parse_error', 'write_failed'] as const;
+      let repairCapStopRequested = false;
+      const maybeRequestRepairCapStop = (): boolean => {
+        if (repairCapStopRequested) return true;
+        const overCapped = REPAIR_CAUSES_TRACKED.filter(c => isRepairCapReached(this.sessionId, c));
+        if (overCapped.length === 0) return false;
+        const summary = overCapped.map(c => `${c}(${getRepairAttempts(this.sessionId, c)} 次)`).join(', ');
+        this.softWarnings.push(`修复上限达到:${summary} — 已强制终止迭代,剩余问题透给调用方`);
+        coreMessages.push({
+          role: 'user',
+          content:
+            `[框架强制 — 修复上限触发]\n`
+            + `以下问题已尝试修复 ≥ 2 次仍未解决:${summary}\n`
+            + `**禁止再调** patch_file / write_file / write_files / run_test 修复这些类型的问题。\n`
+            + `必须立即:\n`
+            + `1. 输出 1-2 句文字总结当前状态(中文),说明哪些 case 没过 + 原因\n`
+            + `2. 让对话流自然结束\n`
+            + `框架会在 quality.warnings 透传这些未解决问题给调用方 AI,由它决定后续如何处理。`
+        });
+        repairCapStopRequested = true;
+        this.appendEvent('thinking', { content: `[framework] repair cap reached: ${summary}. injected stop directive.` });
+        return true;
+      };
+
       try {
         await consumeOneStream(coreMessages);
+
+        // 第一次 consume 后就检查一次 — 如果首轮就遇到反复失败,直接早停
+        if (maybeRequestRepairCapStop()) {
+          // restrictedToReadOnly:只留 read_file / inspect 之类,让 AI 输出文字总结后自然结束
+          await consumeOneStream(coreMessages, { restrictedToReadOnly: true });
+        }
 
         // Watchdog nudge loop. decideWatchdog() returns proceed/nudge/fail.
         // Track repair_loop phase (only emitted when at least one nudge fires).
@@ -1042,6 +1129,7 @@ export class ChatRunner {
         let repairLoopStart: number | null = null;
         while (true) {
           if (abortController.signal.aborted) break;
+          if (repairCapStopRequested) break;  // cap 触发后不再 nudge
           const action = decideWatchdog(currentWatchdogState(nudgesIssued));
           if (action.kind === 'proceed' || action.kind === 'fail') break;
           // action.kind === 'nudge'
@@ -1059,6 +1147,11 @@ export class ChatRunner {
           nudgesIssued = action.attempt;
           // Step-Loosen Phase 4:nudge 后用收窄工具集,逼模型直接 write_files
           await consumeOneStream(coreMessages, { restrictedToWrite: true });
+          // 每轮 nudge 后也检查 cap
+          if (maybeRequestRepairCapStop()) {
+            await consumeOneStream(coreMessages, { restrictedToReadOnly: true });
+            break;
+          }
         }
         if (repairLoopStart != null) {
           emitPhaseEnd(this.sessionId, 'repair_loop', repairLoopStart, 'ok', { nudges: nudgesIssued });

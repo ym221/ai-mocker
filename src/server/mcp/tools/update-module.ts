@@ -16,6 +16,22 @@ import { humanizeStage } from '../lib/stage-humanize.js';
 
 const GENERATED_DIR = resolve('generated');
 
+/**
+ * Extract quality field from the terminal event in result.events.
+ * Set by ChatRunner.finalize() — see chat-runner.ts.
+ */
+function extractQuality(events: any[]): Record<string, unknown> | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e?.type === 'done' || e?.type === 'error' || e?.type === 'paused' || e?.type === 'aborted') {
+      const q = (e.payload as any)?.quality;
+      if (q && typeof q === 'object') return q as Record<string, unknown>;
+      break;
+    }
+  }
+  return null;
+}
+
 function readModuleApiDocHead(userId: number, moduleName: string): string {
   const p = join(GENERATED_DIR, String(userId), moduleName, 'api-doc.md');
   if (!existsSync(p)) return '';
@@ -28,10 +44,15 @@ export function registerUpdateModuleTool(server: McpServer): void {
     {
       title: 'Update Existing Mock Module',
       description:
-        'Modify an existing Mock module. Pass a natural-language instruction describing the desired change (add a field, add an endpoint, tweak response shape, fix a bug). '
+        'Modify an existing Mock module via AI (2-10 min, full LLM cycle). Pass a natural-language instruction describing the change.\n'
+        + '⚡ PREFER patch_* tools (seconds, no LLM) when applicable:\n'
+        + '  • rename/add/remove a field, change constraint → patch_module_field\n'
+        + '  • rename endpoint path / change method → patch_module_endpoint\n'
+        + '  • change row data → manage_data\n'
+        + 'Use update_module only when the change requires AI to understand business logic — e.g. adding endpoints with custom handler code, changing response shape, multi-entity rewrites, fixing controller bugs.\n'
         + 'Blocks up to `waitMaxSec` seconds (default 180, max 300); if generation is still running when the window elapses returns { status:"still-running", sessionId } — call this tool again with the same args to auto-resume. '
         + 'If another session for this moduleName is already in-flight, `onConflict` decides: "resume" (default) attaches to it, "reject" returns ALREADY_PROCESSING, "replace" cancels it and starts fresh. '
-        + 'Set dry_run=true to preview which entities/fields/endpoints would change without touching files. Triggers a full AI generation cycle; progress streamed via MCP progress notifications.',
+        + 'Set dry_run=true to preview which entities/fields/endpoints would change without touching files.',
       inputSchema: {
         moduleName: z.string(),
         instruction: z.string().describe('Natural-language description of the change'),
@@ -98,7 +119,9 @@ export function registerUpdateModuleTool(server: McpServer): void {
           const richDiff = diffSnapshots(before, after);
           const apiDoc = readModuleApiDocHead(user.userId, moduleName);
           const retryWarnings = bumpRetryCounter(`${user.userId}:${moduleName}:update`) ?? [];
-          const allWarnings = [...richDiff.warnings, ...retryWarnings];
+          const quality = extractQuality(result.events);
+          const qualityWarnings = (quality?.warnings as string[] | undefined) ?? [];
+          const allWarnings = [...richDiff.warnings, ...retryWarnings, ...qualityWarnings];
 
           const summaryText = richDiff.lines.length
             ? `Updated "${moduleName}":\n  ${richDiff.lines.join('\n  ')}`
@@ -121,6 +144,7 @@ export function registerUpdateModuleTool(server: McpServer): void {
               hasChange: richDiff.hasChange,
               apiDocPreview: apiDoc,
               warnings: allWarnings,
+              ...(quality ? { quality } : {}),
               ...(attached && actualInstruction != null ? { actualInstruction } : {}),
               ...(attached ? { yourInstruction: instruction } : {}),
               ...(driftWarning ? { warning: driftWarning } : {}),

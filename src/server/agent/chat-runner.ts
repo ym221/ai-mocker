@@ -18,9 +18,10 @@ import { db, sqlite } from '../core/database.js';
 import { providers, presets, sessions, messages, modules, messageEvents } from '../core/schema.js';
 import { decrypt } from '../core/encryption.js';
 import { computeModuleHealth, probeControllerLoadable } from '../core/module-health.js';
+import { runSmokeTest, type SmokeResult } from '../core/smoke-test.js';
 import { resolveDefaultProviderForUser, findAccessibleProvider } from '../core/provider-resolver.js';
 import { buildSystemPrompt } from './system-prompt.js';
-import { buildTools } from './tool-registry.js';
+import { buildTools, buildToolsForNudge } from './tool-registry.js';
 import { ThinkingParser } from './thinking-adapter.js';
 import { buildProviderOptions, reportCacheSupport } from './prompt-cache.js';
 import { decideWatchdog, buildNudgeMessage } from './watchdog.js';
@@ -155,13 +156,19 @@ export class ChatRunner {
   /** 当前 session 已声明的模块名,write_file/write_files 用来自动补 path 前缀。 */
   getModuleName(): string | null { return this.moduleIntent?.moduleName ?? null; }
 
-  // 跟踪本会话内最后一次 run_test 的结果,供 finalize 'done' 前的强校验门用:
+  // 跟踪本会话内最后一次 run_test 的结果,供 finalize 'done' 前的软告警门用:
   //   -1 = 还没跑过 run_test
   //   0  = 跑过且全 pass
   //   >0 = 有 N 个 case 失败
   // AI 跑过 run_test 后,这个值会在 'tool-result' stream 事件被解析填入(见 runAIGeneration)。
+  // Step-Loosen Phase 2:这个值不再硬阻断 finalize('done'),只作为 quality.runTestCases 的软信号。
   private lastRunTestFailures = -1;
   private lastRunTestTotal = 0;
+
+  // Step-Loosen Phase 2:收集本会话的软警告(run_test 部分失败 / smoke skipReason 等),
+  // 通过 quality 字段透传给调用方 AI 让它判断要不要进一步修。
+  private softWarnings: string[] = [];
+  private smokeResult: SmokeResult | null = null;
 
   private constructor(sessionId: string) {
     this.sessionId = sessionId;
@@ -531,7 +538,27 @@ export class ChatRunner {
     this.flushPendingCards();
     // Stamp finishedAt on the terminal event so the frontend can compute total
     // elapsed = finishedAt - assistantMsg.startedAt (works for live + history replay).
-    const terminalPayload = { ...(extra ?? {}), finishedAt: Date.now() };
+    // Step-Loosen Phase 2:把 quality 信号也塞进 terminal payload,让 MCP write-tool-runner
+    // 能从 result.events 提取出来透给调用方 AI 判断"达标但有差异"还是"真失败"。
+    const quality: Record<string, unknown> = {};
+    if (this.smokeResult != null) {
+      quality.smokeTested = this.smokeResult.passed;
+      if (this.smokeResult.endpoint) quality.smokeEndpoint = this.smokeResult.endpoint;
+      if (this.smokeResult.skipped) quality.smokeSkipped = true;
+      if (this.smokeResult.statusCode != null) quality.smokeStatusCode = this.smokeResult.statusCode;
+    }
+    if (this.lastRunTestFailures >= 0) {
+      quality.runTestCases = {
+        passed: this.lastRunTestTotal - this.lastRunTestFailures,
+        total: this.lastRunTestTotal,
+        failures: this.lastRunTestFailures,
+      };
+    }
+    if (this.softWarnings.length > 0) {
+      quality.warnings = [...this.softWarnings];
+    }
+    const terminalPayload: Record<string, unknown> = { ...(extra ?? {}), finishedAt: Date.now() };
+    if (Object.keys(quality).length > 0) terminalPayload.quality = quality;
     this.appendEvent(terminal, terminalPayload);
 
     if (this.currentMessageId != null) {
@@ -855,6 +882,7 @@ export class ChatRunner {
       }
 
       const tools = buildTools(userId, this);
+      const nudgeTools = buildToolsForNudge(userId, this);
       const parser = new ThinkingParser();
       const collectedToolCalls = new Map<string, { name: string; args: unknown }>();
       const affectedModules = new Set<string>();
@@ -877,7 +905,9 @@ export class ChatRunner {
       let llmRoundCounter = 0;
 
       // ===== Stream consumer (extracted so we can re-run for watchdog nudge) =====
-      const consumeOneStream = async (messagesForThisAttempt: CoreMessage[]) => {
+      // Step-Loosen Phase 2/4 强化:nudge 时只暴露写工具 + read_file,杜绝弱模型
+      // 反复调 set_module_intent / get_module_template 的 loop。
+      const consumeOneStream = async (messagesForThisAttempt: CoreMessage[], opts?: { restrictedToWrite?: boolean }) => {
         const roundIndex = ++llmRoundCounter;
         const roundStart = Date.now();
         let firstPartAt: number | null = null;
@@ -887,7 +917,7 @@ export class ChatRunner {
           model,
           system: systemPrompt + extraSystemSuffix,
           messages: messagesForThisAttempt,
-          tools,
+          tools: opts?.restrictedToWrite ? nudgeTools : tools,
           stopWhen: stepCountIs(Number(process.env.CHAT_MAX_STEPS ?? 40)),
           abortSignal: abortController.signal,
           ...(providerOptions ? { providerOptions } : {}),
@@ -989,7 +1019,7 @@ export class ChatRunner {
       // Rationale: matches "must be smooth" — MCP auto-resume already handles
       // long runs, so the worst case is another full-duration retry rather
       // than a silent failure.
-      const NUDGE_MAX = Math.max(0, Number(process.env.CHAT_NUDGE_MAX ?? 2));
+      const NUDGE_MAX = Math.max(0, Number(process.env.CHAT_NUDGE_MAX ?? 3));
       const didWrite = () => {
         for (const c of collectedToolCalls.values()) {
           if (c.name === 'write_file' || c.name === 'write_files') return true;
@@ -1027,7 +1057,8 @@ export class ChatRunner {
           );
           coreMessages.push({ role: 'user', content: nudgeText });
           nudgesIssued = action.attempt;
-          await consumeOneStream(coreMessages);
+          // Step-Loosen Phase 4:nudge 后用收窄工具集,逼模型直接 write_files
+          await consumeOneStream(coreMessages, { restrictedToWrite: true });
         }
         if (repairLoopStart != null) {
           emitPhaseEnd(this.sessionId, 'repair_loop', repairLoopStart, 'ok', { nudges: nudgesIssued });
@@ -1098,16 +1129,13 @@ export class ChatRunner {
             return;
           }
 
-          // (a) run_test failures
+          // (a) run_test failures — Step-Loosen Phase 2:不再硬阻断,改为软警告。
+          // 哲学:smoke test(下面)是 "能调用" 的硬门槛;run_test 是 "细节正确" 的软门槛。
+          // 部分 case 失败不代表模块不可用 — 让调用方 AI 看到 quality.runTestCases 自行决定。
           if (this.lastRunTestFailures > 0) {
-            const failMsg =
-              `模块 "${mn}" 自带回归 run_test 有 ${this.lastRunTestFailures}/${this.lastRunTestTotal} 个 case 失败,`
-              + '不允许声明完成。请逐个修复 controller.ts / schema.sql / _meta.json 直到 run_test 全 pass,'
-              + '不要通过删/改 test.ts assert 跳过失败 case。';
-            sqlite.prepare(`UPDATE messages SET content = ?, message_error = ? WHERE id = ?`)
-              .run(finalText, failMsg, this.currentMessageId!);
-            this.finalize('error', { message: failMsg });
-            return;
+            this.softWarnings.push(
+              `run_test ${this.lastRunTestFailures}/${this.lastRunTestTotal} 个 case 失败 — 模块基础结构 OK 但细节可能需调整`
+            );
           }
 
           // (b) controller load probe — 等同于 mock-router 真实加载一次。这是关键防"假装完成"。
@@ -1128,6 +1156,29 @@ export class ChatRunner {
           } catch (probeErr) {
             // probe 自己 throw 不应该阻止 finalize — 仅记录 warning
             console.warn(`[chat-runner] probeControllerLoadable threw for ${mn}:`, probeErr);
+          }
+
+          // (c) Step-Loosen Phase 2 — smoke test:挑一个最简单 GET endpoint 真打一次。
+          // 这是 "能调用" 的硬门槛(替代之前 run_test 全 pass 的过严标准)。
+          try {
+            const smoke = await runSmokeTest(userId, mn);
+            this.smokeResult = smoke;
+            if (!smoke.passed && !smoke.skipped) {
+              const smokeMsg =
+                `模块 "${mn}" 冒烟测试失败:调 ${smoke.endpoint ?? '(no endpoint)'} 返回 status=${smoke.statusCode ?? '?'},${smoke.error || '响应不合法'}。`
+                + ' 这表示业务代码访问 mock 端点会失败,模块不可用。请修复 controller / schema,确保至少这一个端点能返合法 JSON。';
+              sqlite.prepare(`UPDATE messages SET content = ?, message_error = ? WHERE id = ?`)
+                .run(finalText, smokeMsg, this.currentMessageId!);
+              this.finalize('error', { message: smokeMsg });
+              return;
+            }
+            if (smoke.skipped && smoke.skipReason) {
+              this.softWarnings.push(`smoke test skipped: ${smoke.skipReason}`);
+            }
+          } catch (smokeErr) {
+            // smoke 自己抛 throw 不应阻 finalize,记 warning
+            console.warn(`[chat-runner] runSmokeTest threw for ${mn}:`, smokeErr);
+            this.softWarnings.push('smoke test failed to run (internal error) — module may or may not be working');
           }
         }
 

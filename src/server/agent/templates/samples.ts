@@ -54,9 +54,17 @@ CREATE TABLE IF NOT EXISTS \`mock__todo\` (
   \`title\` TEXT NOT NULL,
   \`done\` INTEGER DEFAULT 0
 );
+
+-- 种子数据(若 spec 要求"种子 N 条" / "seed M rows" 必须写,否则 GET list 返空数组用户必报错)
+INSERT OR IGNORE INTO \`mock__todo\` (id, title, done) VALUES
+  (1, '示例任务1', 0),
+  (2, '示例任务2', 1),
+  (3, '示例任务3', 0);
 \`\`\`
 
 表名 === \`mock__\${entity.name}\`,系统 exec 时自动注入 userId 前缀。
+
+**关键:种子数据写在 schema.sql 末尾**(用 \`INSERT OR IGNORE\`),不要等到所有文件写完后再去调 manage_data 补 — 那样多耗 5 个 LLM round-trip。schema.sql 是唯一在写盘时自动执行的文件,seed 写在它里面是最快、最稳的路径。
 
 **时间戳字段(可选,框架不要求)**:用户需求里若提到创建/更新时间,自己加列,如
 \`created_at TEXT DEFAULT (datetime('now'))\`、\`updated_at TEXT DEFAULT (datetime('now'))\`。

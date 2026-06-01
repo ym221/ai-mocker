@@ -34,11 +34,55 @@ interface WhereCondition {
   in?: (string | number)[];
 }
 
+/**
+ * orderBy 接受三种自然写法,都被框架归一化为安全的 SQL ORDER BY 子句:
+ *   - 'createdAt DESC' / 'id ASC'                              (string)
+ *   - { createdAt: 'DESC' }                                    (single-field object — AI 最常用)
+ *   - [{ createdAt: 'DESC' }, { id: 'ASC' }]                   (multi-field array)
+ *   - ['createdAt DESC', 'id ASC']                             (string-array)
+ *
+ * 列名做白名单(字母/数字/下划线),DESC/ASC 默认 ASC。
+ */
+type OrderByValue = 'ASC' | 'DESC' | 'asc' | 'desc' | string;
+export type OrderByInput =
+  | string
+  | string[]
+  | Record<string, OrderByValue>
+  | Array<Record<string, OrderByValue>>;
+
 interface FindAllOptions {
   page?: number;
   pageSize?: number;
   where?: Record<string, unknown>;
-  orderBy?: string;
+  orderBy?: OrderByInput;
+}
+
+function normalizeOrderBy(raw: OrderByInput | undefined, defaultClause: string): string {
+  if (raw == null) return defaultClause;
+  const SAFE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  const parts: string[] = [];
+  const pushPair = (col: string, dirRaw: OrderByValue) => {
+    if (!SAFE.test(col)) return;  // 静默丢弃不安全列名,绝不拼进 SQL
+    const dir = String(dirRaw).toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+    parts.push(`\`${col}\` ${dir}`);
+  };
+  const handleStr = (s: string) => {
+    // 'createdAt DESC' / 'createdAt'
+    const m = s.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)\s*(ASC|DESC|asc|desc)?$/);
+    if (m) pushPair(m[1], m[2] || 'ASC');
+  };
+  if (typeof raw === 'string') handleStr(raw);
+  else if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (typeof item === 'string') handleStr(item);
+      else if (item && typeof item === 'object') {
+        for (const [k, v] of Object.entries(item)) pushPair(k, v);
+      }
+    }
+  } else if (typeof raw === 'object') {
+    for (const [k, v] of Object.entries(raw)) pushPair(k, v);
+  }
+  return parts.length > 0 ? `ORDER BY ${parts.join(', ')}` : defaultClause;
 }
 
 interface FindAllResult {
@@ -203,7 +247,7 @@ export class BaseModel {
     const offset = (page - 1) * pageSize;
 
     const { clause: whereClause, params: whereParams } = this.buildWhere(options.where);
-    const orderBy = options.orderBy ? `ORDER BY ${options.orderBy}` : 'ORDER BY id DESC';
+    const orderBy = normalizeOrderBy(options.orderBy, 'ORDER BY `id` DESC');
 
     const countSql = `SELECT COUNT(*) as count FROM \`${tableName}\` ${whereClause}`;
     const countResult = sqlite.prepare(countSql).get(...whereParams) as { count: number };
@@ -230,11 +274,21 @@ export class BaseModel {
     const tableName = this.getTableName();
     const cleanData = { ...data };
 
-    // id 是 AUTOINCREMENT 主键,用户不能传(否则覆盖 lastInsertRowid 语义)。
-    // 其它字段一律透传,时间戳由 schema DEFAULT 或 controller 自己负责。
-    delete cleanData.id;
+    // Step-Loosen 修复:detect PK column from PRAGMA table_info,而不是硬假设是 id。
+    // 实测场景:SupplierHotel 用 supplierHotelCode(TEXT)作为 PK,OwnerCandidate 用 userId(INTEGER)。
+    // 此前硬 `delete cleanData.id` + findById(lastInsertRowid) 在这些表上必坏:
+    //   - 无 id 列 → findById 查 "WHERE id = ?" → "no such column: id"
+    //   - 非 ROWID alias 的 PK → lastInsertRowid = 0
+    const pragmaCols = sqlite.prepare(`PRAGMA table_info(\`${tableName}\`)`).all() as Array<{ name: string; type: string; pk: number; notnull: number }>;
+    const pkCols = pragmaCols.filter(c => c.pk > 0).sort((a, b) => a.pk - b.pk);
+    const isIdRowidAlias =
+      pkCols.length === 1 && pkCols[0].name === 'id' && /INTEGER/i.test(pkCols[0].type);
 
-    // Auto-validate against bound meta (no-op if .withMeta() was never called)
+    if (isIdRowidAlias) {
+      // 经典 AUTOINCREMENT 路径:用户不能传 id;lastInsertRowid 是正确 PK
+      delete cleanData.id;
+    }
+
     this.maybeValidate(cleanData, 'create');
 
     const columns = Object.keys(cleanData);
@@ -244,30 +298,35 @@ export class BaseModel {
     const sql = `INSERT INTO \`${tableName}\` (${columns.map(c => `\`${c}\``).join(', ')}) VALUES (${placeholders})`;
     const result = sqlite.prepare(sql).run(...values);
 
-    // SQLite returns lastInsertRowid=0 (not the actual rowid) when the table's
-    // PRIMARY KEY isn't an INTEGER ROWID alias — the most common cause is
-    // `id TEXT PRIMARY KEY` without AUTOINCREMENT. In that case findById(0)
-    // returns null and the controller passes a null `data` to the wrap()
-    // helper, breaking every subsequent endpoint. Detect early and surface a
-    // clear, actionable error so the AI's run_test step fails loudly instead
-    // of silently producing 200 + null payloads.
-    const insertId = result.lastInsertRowid;
-    if (insertId == null || insertId === 0n || insertId === 0) {
-      throw new Error(
-        `BaseModel.create: insert into "${tableName}" returned no auto-incremented id `
-        + `(lastInsertRowid=${insertId}). Most likely schema.sql declares `
-        + `"id TEXT PRIMARY KEY" — change it to `
-        + `"id INTEGER PRIMARY KEY AUTOINCREMENT" and re-run.`
-      );
+    if (isIdRowidAlias) {
+      const insertId = result.lastInsertRowid;
+      if (insertId == null || insertId === 0n || insertId === 0) {
+        throw new Error(
+          `BaseModel.create: insert into "${tableName}" returned no auto-incremented id `
+          + `(lastInsertRowid=${insertId}). Most likely schema.sql declares `
+          + `"id TEXT PRIMARY KEY" — change it to "id INTEGER PRIMARY KEY AUTOINCREMENT" and re-run.`
+        );
+      }
+      const created = this.findById(Number(insertId));
+      if (!created) {
+        throw new Error(
+          `BaseModel.create: row with id=${insertId} not found after INSERT. `
+          + `Check that the table's id column is INTEGER PRIMARY KEY AUTOINCREMENT.`
+        );
+      }
+      return created;
     }
-    const created = this.findById(Number(insertId));
-    if (!created) {
-      throw new Error(
-        `BaseModel.create: row with id=${insertId} not found after INSERT. `
-        + `Check that the table's id column is INTEGER PRIMARY KEY AUTOINCREMENT.`
-      );
+
+    // 非 id-rowid-alias PK:用 PK 列(可能是 single 也可能是 composite)做 SELECT 拿回完整行。
+    // 用户的 cleanData 里必然有这些 PK 字段(否则 INSERT 会因 NOT NULL 失败)。
+    if (pkCols.length === 0) {
+      // 无显式 PK 列(罕见,通常是 AUTOINCREMENT rowid 但 schema 没 INTEGER PRIMARY KEY) — 直接返 cleanData
+      return cleanData;
     }
-    return created;
+    const pkWhere = pkCols.map(c => `\`${c.name}\` = ?`).join(' AND ');
+    const pkValues = pkCols.map(c => cleanData[c.name]);
+    const found = sqlite.prepare(`SELECT * FROM \`${tableName}\` WHERE ${pkWhere}`).get(...(pkValues as any[])) as Record<string, unknown> | undefined;
+    return found ?? cleanData;
   }
 
   update(id: number | string, data: Record<string, unknown>): Record<string, unknown> {

@@ -14,8 +14,29 @@ import { MCP_ERROR_CODES, mcpError } from '../lib/error-codes.js';
 import { runWriteTool } from '../lib/write-tool-runner.js';
 import { humanizeStage } from '../lib/stage-humanize.js';
 import { buildMockBaseUrl } from '../lib/mock-base-url.js';
+import { classifySpec } from '../lib/spec-classifier.js';
+import { generateTier1Files } from '../lib/generate-template.js';
+import { writeFiles } from '../../agent/tools/write-files.js';
+import { computeModuleHealth, probeControllerLoadable } from '../../core/module-health.js';
+import { runSmokeTest } from '../../core/smoke-test.js';
 
 const GENERATED_DIR = resolve('generated');
+
+/**
+ * Extract quality field from the terminal event in result.events.
+ * Set by ChatRunner.finalize() — see chat-runner.ts.
+ */
+function extractQuality(events: any[]): Record<string, unknown> | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e?.type === 'done' || e?.type === 'error' || e?.type === 'paused' || e?.type === 'aborted') {
+      const q = (e.payload as any)?.quality;
+      if (q && typeof q === 'object') return q as Record<string, unknown>;
+      break;
+    }
+  }
+  return null;
+}
 
 // ============================================================================
 // Spec → dry-run plan preview
@@ -99,6 +120,102 @@ function resolveActualModuleName(requestedName: string | null, events: any[]): s
 }
 
 // ============================================================================
+// Step-Loosen Phase 3 — tier 1 template-only generation path
+// ============================================================================
+
+/**
+ * Generate a tier-1 (pure CRUD) module without invoking any LLM.
+ * On any failure (health degraded / controller fails to load / smoke test
+ * doesn't pass), return null so the caller falls through to tier 3 (ChatRunner).
+ */
+async function runTier1(
+  userId: number,
+  moduleName: string,
+  classification: ReturnType<typeof classifySpec>,
+  requestOrigin?: string | null,
+): Promise<any | null> {
+  if (!classification.entities || classification.entities.length === 0) return null;
+  const entity = classification.entities[0];
+  const endpoints = classification.endpoints ?? [];
+  if (endpoints.length === 0) return null;
+
+  const startedAt = Date.now();
+  const files = generateTier1Files({
+    moduleName,
+    displayName: classification.openapi?.info?.title ?? moduleName,
+    description: classification.openapi?.info?.description ?? '',
+    entity,
+    endpoints,
+  });
+
+  const writeRes = await writeFiles(userId, { files });
+  if (!writeRes.success) {
+    console.warn(`[tier-1] write_files failed for ${moduleName}: ${writeRes.error ?? writeRes.message}`);
+    return null;
+  }
+
+  // Health probe
+  const health = computeModuleHealth(userId, moduleName);
+  if (health.health !== 'healthy') {
+    console.warn(`[tier-1] health=${health.health} for ${moduleName}, missing=${health.missing.join(',')}`);
+    return null;
+  }
+  const probe = await probeControllerLoadable(userId, moduleName);
+  if (!probe.ok) {
+    console.warn(`[tier-1] controller load failed for ${moduleName}: ${probe.error}`);
+    return null;
+  }
+  const smoke = await runSmokeTest(userId, moduleName);
+  if (!smoke.passed && !smoke.skipped) {
+    console.warn(`[tier-1] smoke test failed for ${moduleName}: ${smoke.error ?? 'no error'}`);
+    return null;
+  }
+
+  // Success — assemble MCP response
+  const endpointsSummary = summarizeEndpoints(userId, moduleName);
+  const apiDoc = readModuleApiDocHead(userId, moduleName);
+  const mod = db.select().from(modules)
+    .where(and(eq(modules.userId, userId), eq(modules.name, moduleName)))
+    .get();
+  const built = buildMockBaseUrl({
+    moduleName,
+    basePath: mod?.basePath,
+    requestOrigin: requestOrigin ?? undefined,
+  });
+
+  const elapsedMs = Date.now() - startedAt;
+  const quality: Record<string, unknown> = {
+    smokeTested: smoke.passed,
+    smokeEndpoint: smoke.endpoint,
+    tier: 1,
+    generationPath: 'template',
+    generationMs: elapsedMs,
+  };
+  if (smoke.skipped) quality.smokeSkipped = true;
+
+  return {
+    content: [{
+      type: 'text',
+      text: `Created module "${moduleName}" via template path (tier 1, ${elapsedMs}ms, no LLM). Proxy business code to ${built.url}.`,
+    }],
+    structuredContent: {
+      moduleName,
+      status: 'created',
+      sessionId: null,  // no session for template path
+      attached: false,
+      tier: 1,
+      generationPath: 'template',
+      endpoints: endpointsSummary,
+      apiDocPreview: apiDoc,
+      mockBaseUrl: built.url,
+      mockBaseUrlSource: built.source,
+      quality,
+      warnings: [],
+    },
+  };
+}
+
+// ============================================================================
 // Tool registration
 // ============================================================================
 
@@ -141,6 +258,36 @@ export function registerCreateModuleFromSpecTool(server: McpServer): void {
       }
 
       const requestedName = moduleName ?? null;
+
+      // ============================================================================
+      // Step-Loosen Phase 3 — tier 路由
+      // ============================================================================
+      // tier 1 → 模板生成,无 LLM,几秒返回
+      // tier 2 → MVP 暂走 tier 3(完整 AI 链路);后续可优化为 generateObject 单次填充
+      // tier 3 → 走 ChatRunner 全量(现状)
+      try {
+        const classification = classifySpec(spec, moduleName);
+        if (classification.tier === 1 && classification.entities && classification.endpoints && classification.entities[0]) {
+          const inferredName = moduleName || classification.inferredModuleName;
+          if (!inferredName) {
+            // Without a usable module name we can't write files — fall through to tier 3
+            console.log('[classifier] tier 1 detected but no module name resolved — falling through to tier 3');
+          } else {
+            try {
+              const tier1Result = await runTier1(user.userId, inferredName, classification, getMcpRequestOrigin());
+              if (tier1Result) return tier1Result;
+            } catch (err) {
+              console.warn(`[classifier] tier 1 generation threw for ${inferredName} — falling back to tier 3:`, (err as Error).message);
+              // Fall through to tier 3
+            }
+          }
+        }
+        if (classification.tier === 2) {
+          console.log(`[classifier] tier 2 detected (${classification.reason}) — MVP routes through tier 3 ChatRunner`);
+        }
+      } catch (err) {
+        console.warn('[classifier] spec classification threw — falling back to tier 3:', (err as Error).message);
+      }
 
       return runWriteTool({
         userId: user.userId,
@@ -186,7 +333,10 @@ export function registerCreateModuleFromSpecTool(server: McpServer): void {
             ? 'mockBaseUrl 用 localhost 兜底,若 MCP 部署在远程主机,请管理员配 env MCP_PUBLIC_URL 或反向代理加 X-Forwarded-Proto/Host/Port,否则把这个 URL 写入业务代码后部署会失败。'
             : undefined;
 
-          const warnings = bumpRetryCounter(`${user.userId}:${actualModuleName}:create`);
+          const retryWarnings = bumpRetryCounter(`${user.userId}:${actualModuleName}:create`) ?? [];
+          const quality = extractQuality(result.events);
+          const qualityWarnings = (quality?.warnings as string[] | undefined) ?? [];
+          const warnings = [...retryWarnings, ...qualityWarnings];
 
           return {
             content: [{
@@ -204,6 +354,7 @@ export function registerCreateModuleFromSpecTool(server: McpServer): void {
               mockBaseUrlSource,
               ...(mockBaseUrlHint ? { mockBaseUrlHint } : {}),
               warnings,
+              ...(quality ? { quality } : {}),
               ...(attached && actualInstruction != null ? { actualInstruction } : {}),
               ...(attached ? { yourInstruction: spec } : {}),
               ...(driftWarning ? { warning: driftWarning } : {}),

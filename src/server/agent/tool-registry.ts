@@ -47,6 +47,17 @@ function bumpRepairAttempt(sessionId: string, cause: string): number {
   return next;
 }
 
+// Step-Loosen Phase 2.5:per-cause hard cap.
+// 超过这个数,observability emit 一条 'repair_cap_reached' 事件,
+// 让 AI 在下次思考时看到 system 提示自己 stop 修同类问题(由 chat-runner 注入)。
+const REPAIR_HARD_CAP_PER_CAUSE = Math.max(1, Number(process.env.CHAT_REPAIR_HARD_CAP ?? 2));
+export function getRepairAttempts(sessionId: string, cause: string): number {
+  return repairAttempts.get(sessionId)?.get(cause) ?? 0;
+}
+export function isRepairCapReached(sessionId: string, cause: string): boolean {
+  return getRepairAttempts(sessionId, cause) >= REPAIR_HARD_CAP_PER_CAUSE;
+}
+
 /** Map a tool failure result to a repair cause. Returns null if not a "repair needed" failure. */
 function classifyFailure(toolName: string, result: any): { cause: RepairCause; targetFiles: string[]; snippet: string } | null {
   if (!result || typeof result !== 'object') return null;
@@ -81,6 +92,36 @@ function classifyFailure(toolName: string, result: any): { cause: RepairCause; t
     }
   }
   return null;
+}
+
+/**
+ * Subset of the tool surface for watchdog nudge rounds.
+ *
+ * When `restrictedToWrite=true`, only writing primitives are exposed —
+ * removing the "preparation" tools (set_module_intent / get_module_template /
+ * list_modules / inspect_module) that some weak models loop on instead of
+ * actually writing files. read_file stays in case the model needs to peek
+ * at something it wrote partially. delete_module / run_test / manage_data
+ * still belong to the workflow tail, kept available.
+ */
+const NUDGE_TOOL_ALLOWLIST = new Set([
+  'write_file',
+  'write_files',
+  'read_file',
+  'run_test',
+  'manage_data',
+  // 注意:**不要**加 delete_module — 弱模型把 delete_module 当"重启路径"调,
+  // 会删掉之前已经写入(含种子)的表,然后再新写 schema 漏字段 → INSERTs 错位,
+  // 最终模块"被自己删空"。要求 AI 在错误状态下也只能修不能删。
+]);
+
+export function buildToolsForNudge(userId: number, runner?: ChatRunner) {
+  const all = buildTools(userId, runner);
+  const filtered: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(all)) {
+    if (NUDGE_TOOL_ALLOWLIST.has(k)) filtered[k] = v;
+  }
+  return filtered as ReturnType<typeof buildTools>;
 }
 
 export function buildTools(userId: number, runner?: ChatRunner) {
@@ -285,11 +326,31 @@ export function buildTools(userId: number, runner?: ChatRunner) {
     }),
 
     delete_module: tool({
-      description: 'Delete a module completely: drop tables, delete files, remove from database.',
+      description:
+        'Delete a module completely: drop tables, delete files, remove from database. '
+        + '**Refuses** to delete the module that the current session is creating/editing — '
+        + 'using delete_module as an "undo" shortcut is destructive (it drops seed tables) '
+        + 'and will leave the new files inconsistent. If you need to fix a bad generation, '
+        + 'use write_files/write_file to overwrite or run_test to validate fixes.',
       parameters: z.object({
         moduleName: z.string().describe('Module name to delete'),
       }),
-      execute: async ({ moduleName }) => serialize(() => deleteModule(userId, moduleName)),
+      execute: async ({ moduleName }) => {
+        // Guard:不允许 AI 在生成/修改自己正在做的模块时调 delete_module。
+        // 弱模型偶尔把 delete_module 当"撤销重来"用,会删掉已经写入的种子数据
+        // 表,然后再写新 schema 漏字段 → INSERTs 错位,模块"被自己删空"。
+        if (runner && runner.getModuleName() === moduleName) {
+          return {
+            success: false,
+            error:
+              `Refused: delete_module is blocked for "${moduleName}" because the current session is actively creating/editing it. `
+              + 'Calling delete_module here is destructive — it drops any seed data tables your earlier schema.sql wrote, '
+              + 'and the rewrite-from-scratch cycle frequently lands in an inconsistent state. '
+              + 'Instead: use write_files/write_file to overwrite the problematic files (controller/test/etc.), then re-run run_test.',
+          };
+        }
+        return serialize(() => deleteModule(userId, moduleName));
+      },
     }),
 
     get_module_template: tool({

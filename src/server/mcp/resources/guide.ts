@@ -27,10 +27,48 @@ const GUIDE_MARKDOWN = `# MockForge MCP
 |------|------|------|
 | 读 | <1s | \`list_modules\` \`inspect_module\` \`get_mock_access_log\` \`diff_with_openapi\` \`get_session_status\` |
 | 数据 / 测试 / 删除 | <30s | \`manage_data\` \`run_test\` \`delete_module\` \`cancel_session\` \`generate_handoff_report\` |
-| **AI 生成新模块** | **7-12 min** | \`create_module_from_spec\` |
-| **AI 修改模块** | **2-10 min** | \`update_module\` — 小改 2-5min / 大改 5-10min（含内部测试 + 修复循环） |
+| **字段/路径 patch** | **<5s** | \`patch_module_field\` \`patch_module_endpoint\` — deterministic,无 LLM |
+| **AI 生成新模块** | **几秒~10min** | \`create_module_from_spec\` — 纯 CRUD spec 走模板路径几秒;复杂 spec 走 AI 7-12min |
+| **AI 修改模块** | **2-10 min** | \`update_module\` — 小改 2-5min / 大改 5-10min(含内部测试 + 修复循环) |
 
-> 增删改数据走 \`manage_data\` 直连 DB，30 秒内完成；只有 \`create_module_from_spec\` / \`update_module\` 走 LLM，是分钟级。
+> 增删改数据走 \`manage_data\` 直连 DB,30 秒内完成。
+> **字段名/路径/CRUD shape 改动走 \`patch_*\` 工具(秒级)**,只有"业务逻辑要改"才走 \`update_module\`。
+
+## 改动选哪个工具(决策树 — 关键!)
+
+> 用对工具能让"改一个字段名"从 8 分钟降到 3 秒。
+
+| 改动类型 | 工具 | 耗时 | 走 LLM 吗 |
+|---------|------|------|----------|
+| 改某条数据 / 加几条数据 / 删数据 | \`manage_data\` | <1s | 不 |
+| 改字段名(rename) / 加字段 / 删字段 / 改字段约束(enum/min/max/required) | \`patch_module_field\` | <5s | 不 |
+| 改 endpoint path / 改 method | \`patch_module_endpoint\` | <5s | 不 |
+| 加/删 endpoint(含 handler 代码) | \`update_module\` | 2-10min | 走 |
+| 改 endpoint 内业务逻辑 / 改响应 shape / 加多实体关联 | \`update_module\` | 2-10min | 走 |
+| 整个模块重建 / 不存在的模块 | \`create_module_from_spec\` | 几秒~10min | 看 tier |
+
+**直觉判断**:能写出 deterministic 改法的小改动 → 用 \`patch_*\`;需要 AI "理解业务" 才能改的 → 用 \`update_module\`。
+
+## 通过标准(client AI 必读 — 决定要不要再调 update_module)
+
+### 硬标准(必须满足,缺一即失败,需重试或换 model)
+- \`status: 'created'\` / \`status: 'updated'\`
+- \`quality.smokeTested: true\`(冒烟通过 — 至少 1 个 endpoint 真实响应通过)
+- \`endpoints.length > 0\`
+
+### 软差异(允许,**不要**因此再调 update_module)
+- 字段名拼写/大小写/下划线风格差异
+- 示例数据具体值不同(name 是 "Alice" 还是 "张三")
+- 部分 run_test case 失败(由 \`quality.runTestCases.passed < total\` 透出)
+- 可选字段缺失
+- api-doc.md 部分内容简化
+
+### 处理软差异的正确姿势
+- 改字段名拼写 → 调 \`patch_module_field({op:'rename'})\`(秒级)
+- 改示例数据 → 调 \`manage_data({action:'update'})\`(秒级)
+- 缺可选字段 → 调 \`patch_module_field({op:'add'})\`(秒级)
+
+**反模式(浪费 10 分钟)**:收到 \`status:'created' + smokeTested:true\` 后,因为字段名是 \`mail\` 而你期望 \`email\` 就再调 \`update_module\`。应该用 \`patch_module_field({op:'rename', field:'mail', newField:'email'})\`,3 秒搞定。
 
 ## ⚡ 长任务策略：异步并行 + 自动续接
 
@@ -43,7 +81,7 @@ const GUIDE_MARKDOWN = `# MockForge MCP
   - 或 polling \`get_session_status(sessionId)\`（5ms 非阻塞快照）
   - 客户端 transport 断了不要紧，server-side 任务继续跑，重发即续接
 
-## 13 个工具
+## 15 个工具
 
 **读**
 - \`list_modules\` — 列出所有模块(name / status / health / endpoints / mockBaseUrl / createdBy / updatedBy / 时间);响应顶层含 \`currentUser: {id, username}\` 让你一眼知道"我是谁"
@@ -56,6 +94,10 @@ const GUIDE_MARKDOWN = `# MockForge MCP
 - \`manage_data\` — \`insert | update | delete | list | batch_delete | clear | bulk_generate\`
 - \`run_test(moduleName)\` — 跑模块自带回归
 - \`delete_module(moduleName)\` — 不可逆
+
+**写（deterministic patch,秒级,不走 LLM）**
+- \`patch_module_field({ moduleName, op:'rename'|'add'|'remove'|'change_constraint', field, newField?, type?, constraint? })\`
+- \`patch_module_endpoint({ moduleName, op:'rename_path'|'change_method', method, path, newPath?, newMethod? })\`
 
 **写（AI 生成，分钟级）**
 - \`create_module_from_spec({ spec, moduleName, dry_run?, waitMaxSec?, onConflict?, provider?, model?, preset? })\`

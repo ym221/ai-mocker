@@ -66,11 +66,13 @@ export function buildNudgeMessage(
   moduleName: string
 ): string {
   return (
-    `[系统提示：工具调用强制] 你已通过 set_module_intent 声明 moduleIntent=${operation} `
-    + `模块="${moduleName}"，但本轮未调用任何 write_file 或 write_files。`
-    + `现在必须立刻使用 write_files（优先，单次批写 5 文件）或多次 write_file 写入：`
-    + `_meta.json、schema.sql、controller.ts、test.ts、api-doc.md —— `
-    + `少一个就算失败。若 write_files 返回 "no files provided"，改用 write_file 按文件分别写入。`
-    + `不要再只输出思考或说明文本 — 下一步必须是工具调用。`
+    `[系统强制 — 第二次提醒,这是最后机会] 你已声明 moduleIntent=${operation} 模块="${moduleName}",`
+    + `但**反复在调用 set_module_intent / get_module_template / list_modules / read_file 等准备工作**,没有调用 write_files/write_file 真正落盘。\n`
+    + `下一步**唯一允许的工具**是 \`write_files\`(单次批写 5 文件) 或 \`write_file\`(按文件分别写)。\n`
+    + `**禁止再调** set_module_intent / get_module_template / list_modules / read_file / inspect_module 等任何"准备类"工具 — 你已经准备过了。\n`
+    + `必须立即用你已有的上下文(spec + 之前拿过的模板)直接组装 5 个文件:`
+    + `_meta.json、schema.sql、controller.ts、test.ts、api-doc.md。\n`
+    + `若 write_files 返 "no files provided",**立即改用 write_file 按单文件依次写入**,不要重试 write_files。\n`
+    + `不允许只输出文本说明 — 下一个 part 必须是工具调用,且工具名必须是 write_files 或 write_file。`
   );
 }

@@ -10,14 +10,16 @@ import { injectUserIdToTableNames } from '../../core/table-name-prefix.js';
 const GENERATED_DIR = resolve('generated');
 
 /** 抽取 schema.sql 里的 INSERT 语句,用于 run_test 清表后重灌种子。
- *  按 ';' 切语句,只保留 INSERT INTO 开头的;假设 VALUES 内不嵌套真实分号。 */
+ *  按 ';' 切语句,保留所有 INSERT 变体(INSERT INTO / INSERT OR IGNORE INTO /
+ *  INSERT OR REPLACE INTO 等 — AI 常用 OR IGNORE 防重复);假设 VALUES 内不嵌
+ *  套真实分号。 */
 function extractInsertStatements(sql: string): string[] {
   return sql
     .replace(/--[^\n]*/g, '')
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .split(';')
     .map(s => s.trim())
-    .filter(s => /^INSERT\s+INTO\s+/i.test(s));
+    .filter(s => /^INSERT(\s+OR\s+(IGNORE|REPLACE|ABORT|FAIL|ROLLBACK))?\s+INTO\s+/i.test(s));
 }
 
 export async function runTest(userId: number, moduleName: string): Promise<{

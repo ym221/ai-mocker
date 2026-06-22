@@ -18,7 +18,9 @@ import { z } from 'zod';
 
 export const fieldSchema = z.object({
   name: z.string().min(1),
-  type: z.enum(['string', 'integer', 'int', 'number', 'decimal', 'float', 'boolean', 'date', 'datetime', 'text']),
+  // json/array/object: 数组或对象字段。schema.sql 存为 TEXT,框架写入时自动 JSON 序列化、
+  // 读取时自动解析回数组/对象(见 BaseModel.hydrateRow),controller 无需手动 stringify/parse。
+  type: z.enum(['string', 'integer', 'int', 'number', 'decimal', 'float', 'boolean', 'date', 'datetime', 'text', 'json', 'array', 'object']),
   required: z.boolean().optional(),
   default: z.union([z.string(), z.number(), z.boolean(), z.null()]).optional(),
   enum: z.array(z.union([z.string(), z.number()])).optional(),
@@ -174,10 +176,44 @@ export interface EmitParamsResult {
 }
 
 /**
+ * Coerce the many shapes weak models emit into the canonical params object,
+ * BEFORE strict validation. This is parse-then-validate, not validation-skipping:
+ * the result still goes through paramsSchema + consistency checks unchanged.
+ *
+ * Handles (all observed from real deepseek runs):
+ *   - the whole payload as a JSON string
+ *   - nested under a `params` key: { params: {...} } or { params: "{...}" }
+ *   - individual sub-fields stringified: { envelope: "{...}", entities: "[...]" }
+ * Without this, a weak model can burn its entire time budget failing emit_params
+ * on shape/encoding alone and never reach the file-writing stage.
+ */
+function coerceRawParams(raw: unknown): unknown {
+  let obj: any = raw;
+  if (typeof obj === 'string') {
+    try { obj = JSON.parse(obj); } catch { return raw; }
+  }
+  if (!obj || typeof obj !== 'object') return raw;
+  // Unwrap a single `params` wrapper if the real payload is nested there.
+  if ('params' in obj && !('moduleName' in obj)) {
+    let inner = obj.params;
+    if (typeof inner === 'string') { try { inner = JSON.parse(inner); } catch { /* keep */ } }
+    if (inner && typeof inner === 'object') obj = inner;
+  }
+  // Parse any stringified sub-fields.
+  const out: any = { ...obj };
+  for (const key of ['envelope', 'entities', 'endpoints', 'pagination']) {
+    if (typeof out[key] === 'string') {
+      try { out[key] = JSON.parse(out[key]); } catch { /* leave for validation to report */ }
+    }
+  }
+  return out;
+}
+
+/**
  * 校验 raw input → 通过则返 normalized params。
  */
 export function emitParams(raw: unknown): EmitParamsResult {
-  const parsed = paramsSchema.safeParse(raw);
+  const parsed = paramsSchema.safeParse(coerceRawParams(raw));
   if (!parsed.success) {
     const errors = parsed.error.issues.map(iss => ({
       field: iss.path.join('.'),

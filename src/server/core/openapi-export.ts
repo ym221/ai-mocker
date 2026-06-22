@@ -19,6 +19,8 @@ function fieldTypeToOpenApi(t: string): { type: string; format?: string } {
     case 'boolean': return { type: 'boolean' };
     case 'date': return { type: 'string', format: 'date' };
     case 'datetime': case 'timestamp': return { type: 'string', format: 'date-time' };
+    case 'array': case 'list': return { type: 'array' };
+    case 'json': case 'object': return { type: 'object' };
     case 'text': case 'string': default: return { type: 'string' };
   }
 }

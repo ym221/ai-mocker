@@ -5,6 +5,7 @@ import { pathToFileURL } from 'url';
 import { mockContext } from './base-model.js';
 import { sqlite } from './database.js';
 import { recordMockAccess } from './access-log.js';
+import { resolveHandlerName, candidateHandlerNames } from './handler-dispatch.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -79,6 +80,28 @@ export default async function mockRouter(app: FastifyInstance) {
         const result: Record<string, string> = {};
         for (const [k, v] of params) result[k] = v;
         done(null, result);
+      } catch (err) {
+        done(err as Error);
+      }
+    },
+  );
+
+  // Tolerant JSON parser for /mock — action-style endpoints (pay/ship/approve/...)
+  // carry no body, but clients (fetch/axios/curl) routinely send `Content-Type:
+  // application/json` with an empty body. Fastify's default parser rejects that with
+  // 400 "Body cannot be empty", crashing the request before the controller runs.
+  // Here an empty body parses to {} so body-less POSTs always reach the controller.
+  app.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (_req, body, done) => {
+      const text = (body as string) ?? '';
+      if (text.trim() === '') {
+        done(null, {});
+        return;
+      }
+      try {
+        done(null, JSON.parse(text));
       } catch (err) {
         done(err as Error);
       }
@@ -234,59 +257,30 @@ export default async function mockRouter(app: FastifyInstance) {
     // 6. Call handler within mockContext so BaseModel knows the userId
     try {
       const query = request.query as Record<string, string>;
-      const body = request.body as Record<string, unknown>;
+      // Default to {} so controllers can always destructure body, even for body-less
+      // requests (no Content-Type, or a method Fastify left unparsed).
+      const body = (request.body ?? {}) as Record<string, unknown>;
 
       // Controllers may be sync OR async; await unconditionally so the response
       // processing below (statusCode/__mock__ extraction) sees the resolved value,
       // never a Promise. Sync controllers are untouched by `await` on non-Promises.
-      const result = await mockContext.run({ userId }, () => {
-        // Preferred: explicit named controller export (multi-entity modules).
-        // _meta.endpoints[].controller = "listItems" → ctrl.listItems({ body, query, params })
-        const namedHandler = matchedEndpoint!.controller;
-        if (namedHandler) {
-          if (typeof ctrl[namedHandler] !== 'function') {
-            const available = Object.keys(ctrl).filter(k => typeof ctrl[k] === 'function').join(', ') || '(none)';
-            throw new Error(
-              `Controller export "${namedHandler}" not found (from _meta.endpoints[].controller). `
-              + `Available exports: ${available}`
-            );
-          }
-          return ctrl[namedHandler]({ body, query, params: matchedParams });
-        }
+      // 统一传 req-style `{ body, query, params }`,跟 named-handler 完全一致。
+      // 这是 LLM 默认会写的 express-style 签名(claude-sonnet 等强模型实测都用这种)。
+      const req = { body, query, params: matchedParams };
 
-        // Legacy type-based dispatch (single-entity modules).
-        // 统一传 req-style `{ body, query, params }`,跟 named-handler 完全一致。
-        // 这是 LLM 默认会写的 express-style 签名(claude-sonnet 等强模型实测都用这种),
-        // 此前传单参数(query / id / body)的设计跟现代 LLM 输出对不齐,run_test 必挂。
-        const req = { body, query, params: matchedParams };
-
-        // Step-Workflow-1:fallback handler 推断 — AI 经常用命名导出(如 `search`/
-        // `ownerOptions`)但 _meta.endpoints[i].controller 没填,导致类型默认 dispatch
-        // 找不到 ctrl.list/ctrl.getById。改为按 type + 路径推断候选名,逐个尝试。
-        const lastSeg = matchedEndpoint!.path.split('/').filter(s => s && !s.startsWith(':') && !s.startsWith('{')).pop() || '';
-        const pathCamel = lastSeg.replace(/[_-]+([a-zA-Z])/g, (_, c) => c.toUpperCase()).replace(/^[A-Z]/, m => m.toLowerCase());
-
-        const candidatesByType: Record<string, string[]> = {
-          list: [pathCamel, 'list', 'search', 'findAll', 'list' + pathCamel.charAt(0).toUpperCase() + pathCamel.slice(1)].filter(Boolean),
-          detail: [pathCamel, 'getById', 'detail', 'findOne', 'get' + pathCamel.charAt(0).toUpperCase() + pathCamel.slice(1)].filter(Boolean),
-          create: [pathCamel, 'create', 'add', 'insert'].filter(Boolean),
-          update: [pathCamel, 'update', 'edit'].filter(Boolean),
-          delete: [pathCamel, 'remove', 'delete', 'del'].filter(Boolean),
-          custom: [matchedEndpoint!.handler || matchedEndpoint!.name || '', pathCamel].filter(Boolean),
-        };
-        const candidates = candidatesByType[matchedEndpoint!.type] ?? [pathCamel];
-        for (const name of candidates) {
-          if (name && typeof ctrl[name] === 'function') {
-            return ctrl[name](req);
-          }
-        }
+      // Resolve the export via the shared resolver — recognizes explicit
+      // _meta.endpoints[].controller plus the conventional <verb><Entity> /
+      // <action><Entity> names modern LLMs emit (listProducts / getStats / payOrder).
+      const handlerName = resolveHandlerName(ctrl, matchedEndpoint!);
+      if (!handlerName) {
         const available = Object.keys(ctrl).filter(k => typeof ctrl[k] === 'function').join(', ') || '(none)';
         throw new Error(
           `Cannot dispatch endpoint ${matchedEndpoint!.method.toUpperCase()} ${matchedEndpoint!.path} (type=${matchedEndpoint!.type}). `
-          + `Tried handlers: [${candidates.join(', ')}]. Available exports: [${available}]. `
+          + `Tried: [${candidateHandlerNames(matchedEndpoint!).join(', ')}]. Available exports: [${available}]. `
           + `Set _meta.endpoints[i].controller="<exportName>" to bind explicitly, or rename your export to match one of the tried names.`,
         );
-      });
+      }
+      const result = await mockContext.run({ userId }, () => (ctrl[handlerName] as Function)(req));
 
       // ========== Response processing (priority order) ==========
       // 1) __mock__ escape hatch — fully custom response

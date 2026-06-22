@@ -100,20 +100,25 @@ export const request = {
     return { status: res.status, body };
   },
   async post(path: string, data?: unknown) {
-    const res = await fetch(`${BASE_URL}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: data ? JSON.stringify(data) : undefined,
-    });
+    // Only advertise a JSON body when there is one. Sending `Content-Type:
+    // application/json` with an empty body makes the server reject the request
+    // before the handler runs — body-less action endpoints (pay/ship/...) must work.
+    const init: RequestInit = { method: 'POST' };
+    if (data !== undefined) {
+      init.headers = { 'Content-Type': 'application/json' };
+      init.body = JSON.stringify(data);
+    }
+    const res = await fetch(`${BASE_URL}${path}`, init);
     const body = await res.json();
     return { status: res.status, body };
   },
   async put(path: string, data?: unknown) {
-    const res = await fetch(`${BASE_URL}${path}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: data ? JSON.stringify(data) : undefined,
-    });
+    const init: RequestInit = { method: 'PUT' };
+    if (data !== undefined) {
+      init.headers = { 'Content-Type': 'application/json' };
+      init.body = JSON.stringify(data);
+    }
+    const res = await fetch(`${BASE_URL}${path}`, init);
     const body = await res.json();
     return { status: res.status, body };
   },

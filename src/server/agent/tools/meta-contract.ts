@@ -13,9 +13,47 @@
  * 同时校验"全局名字唯一" — 接受按 (name, currentUserId) 已存在的修改,但拒绝
  * 创建一个跟其他 user 同名的新模块(application-level UNIQUE)。
  */
+import { existsSync, readFileSync } from 'fs';
+import { join, resolve } from 'path';
 import { db } from '../../core/database.js';
 import { modules } from '../../core/schema.js';
 import { eq, and, ne } from 'drizzle-orm';
+import { getEntities } from '../../core/meta-schema.js';
+
+const GENERATED_DIR = resolve('generated');
+
+/**
+ * Strip the mock__ / userId prefix to the bare table identifier.
+ *   "mock__Order" → "Order", "mock__1_Order" → "Order", "Order" → "Order"
+ */
+function bareTableName(t: unknown): string {
+  return String(t ?? '').replace(/^mock__/, '').replace(/^\d+_/, '');
+}
+
+/**
+ * Map every bare table name owned by this user's OTHER modules → owning module.
+ * Tables are physically scoped only by userId (mock__<userId>_<table>) and SQLite
+ * table names are case-insensitive, so two modules of the same user that declare a
+ * same-named entity table would silently share one table and clobber each other's
+ * data. We key case-insensitively to catch Order vs order.
+ */
+function collectOtherModuleTables(userId: number, currentModuleName: string): Map<string, { module: string; table: string }> {
+  const map = new Map<string, { module: string; table: string }>();
+  const others = db.select().from(modules)
+    .where(and(eq(modules.userId, userId), ne(modules.name, currentModuleName)))
+    .all();
+  for (const m of others) {
+    const metaPath = join(GENERATED_DIR, String(userId), m.name, '_meta.json');
+    if (!existsSync(metaPath)) continue;
+    let parsed: unknown;
+    try { parsed = JSON.parse(readFileSync(metaPath, 'utf-8')); } catch { continue; }
+    for (const e of getEntities(parsed as any)) {
+      const bare = bareTableName(e.tableName || e.name);
+      if (bare) map.set(bare.toLowerCase(), { module: m.name, table: bare });
+    }
+  }
+  return map;
+}
 
 export interface MetaContractError {
   field: string;       // 哪个字段违反,如 "basePath" / "endpoints[2].path"
@@ -113,6 +151,41 @@ export function validateMetaContract(
         `模块名 "${moduleName}" 已被其他用户占用(${owners})。模块名要求全局唯一。`
         + ' 建议改名:加业务前缀(如 "team_' + moduleName + '" / "acme_' + moduleName + '"),'
         + ' 然后把 _meta.json 文件路径里的目录名同步改成新名字。',
+    });
+  }
+
+  // ---- 4. 实体表名跨模块唯一(同一 user)----
+  // 表物理上只按 userId 隔离(mock__<userId>_<table>),不按模块。所以同一用户下两个
+  // 模块若有同名实体表,会共用同一张物理表、互相覆盖数据。写盘前拦截,要求改成唯一名。
+  const myEntities = getEntities(meta as any);
+  if (myEntities.length > 0) {
+    const owned = collectOtherModuleTables(userId, moduleName);
+    const seenWithinThisModule = new Set<string>();
+    myEntities.forEach((e, idx) => {
+      const bare = bareTableName(e.tableName || e.name);
+      if (!bare) return;
+      const key = bare.toLowerCase();
+      // 4a. 与本用户其他模块冲突
+      const hit = owned.get(key);
+      if (hit) {
+        errors.push({
+          field: `entities[${idx}].tableName`,
+          message:
+            `实体表名 "${bare}" 已被你的另一个模块 "${hit.module}" 占用。表是按用户共享的`
+            + `(同名表会互相覆盖数据,SQLite 表名还大小写不敏感),所以同一用户下不同模块的实体表名必须唯一。`
+            + ` 请把本模块该实体改成带模块前缀的唯一名 "${moduleName}_${bare}":`
+            + ` 同步改 _meta.json 的 entities[].tableName="mock__${moduleName}_${bare}"、`
+            + ` schema.sql 的 CREATE TABLE \`mock__${moduleName}_${bare}\`、controller 里 new BaseModel("mock__${moduleName}_${bare}") 三处一致。`,
+        });
+      }
+      // 4b. 本模块内部重名实体
+      if (seenWithinThisModule.has(key)) {
+        errors.push({
+          field: `entities[${idx}].tableName`,
+          message: `实体表名 "${bare}" 在本模块内重复出现。每个实体的 tableName 必须唯一。`,
+        });
+      }
+      seenWithinThisModule.add(key);
     });
   }
 

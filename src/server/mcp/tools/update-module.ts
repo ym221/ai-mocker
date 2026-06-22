@@ -12,7 +12,7 @@ import { snapshotMeta, diffSnapshots } from '../lib/update-diff.js';
 import { buildUpdateUserContent, extractUpdateInstruction } from '../lib/instruction-utils.js';
 import { MCP_ERROR_CODES, mcpError } from '../lib/error-codes.js';
 import { runWriteTool } from '../lib/write-tool-runner.js';
-import { humanizeStage } from '../lib/stage-humanize.js';
+import { humanizeStage, formatEtaPhrase } from '../lib/stage-humanize.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -154,7 +154,7 @@ export function registerUpdateModuleTool(server: McpServer): void {
 
         buildStillRunningResponse: ({ result, attached, driftWarning, actualInstruction }) => {
           const info = humanizeStage(result.stage);
-          const text = `模块 "${moduleName}" ${info.description}(已用 ${result.elapsedSec ?? '?'}s, session=${result.sessionId})。预计再 ~${info.expectedRemainingSec}s 可完成 — 重新调用相同参数即自动续接。`;
+          const text = `模块 "${moduleName}" ${info.description}(已用 ${result.elapsedSec ?? '?'}s, session=${result.sessionId})。${formatEtaPhrase(result.elapsedSec, info)} — 重新调用相同参数即自动续接。`;
           return {
             content: [{ type: 'text', text }],
             structuredContent: {

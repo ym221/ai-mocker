@@ -142,6 +142,34 @@ export class BaseModel {
     return this;
   }
 
+  /**
+   * Coerce a DB row's columns back to the types declared in _meta, so the API
+   * output matches the contract regardless of how the controller was written:
+   *   - boolean fields: SQLite stores 0/1 → emit false/true
+   *   - json/array/object fields: stored as JSON text → emit the parsed value
+   * Only runs when withMeta() bound an entity; unknown/scalar columns pass through
+   * untouched. Idempotent: a value already of the target type is left as-is, so
+   * controllers that also coerce by hand keep working.
+   */
+  private hydrateRow<T extends Record<string, unknown> | null>(row: T): T {
+    if (!row || !this.boundEntity?.fields) return row;
+    for (const f of this.boundEntity.fields) {
+      if (!(f.name in row)) continue;
+      const v = (row as Record<string, unknown>)[f.name];
+      if (v === null || v === undefined) continue;
+      const type = String(f.type || '').toLowerCase();
+      if (type === 'boolean' || type === 'bool') {
+        if (typeof v === 'number') (row as Record<string, unknown>)[f.name] = v !== 0;
+        else if (typeof v === 'string') (row as Record<string, unknown>)[f.name] = v === '1' || v.toLowerCase() === 'true';
+      } else if (type === 'json' || type === 'array' || type === 'object' || type === 'list') {
+        if (typeof v === 'string' && (v.startsWith('[') || v.startsWith('{'))) {
+          try { (row as Record<string, unknown>)[f.name] = JSON.parse(v); } catch { /* leave raw */ }
+        }
+      }
+    }
+    return row;
+  }
+
   /** Get the actual table name with userId prefix */
   private getTableName(): string {
     const ctx = mockContext.getStore();
@@ -187,10 +215,33 @@ export class BaseModel {
     return this.withMeta(moduleName);
   }
 
+  /** Real column names of this table (empty set if the table doesn't exist). */
+  private tableColumns(): Set<string> {
+    try {
+      const cols = sqlite.prepare(`PRAGMA table_info(\`${this.getTableName()}\`)`).all() as Array<{ name: string }>;
+      return new Set(cols.map(c => c.name));
+    } catch {
+      return new Set();
+    }
+  }
+
   /** Build WHERE clause from conditions */
   private buildWhere(where?: Record<string, unknown>): { clause: string; params: unknown[] } {
     if (!where || Object.keys(where).length === 0) {
       return { clause: '', params: [] };
+    }
+
+    // Drop filter keys that aren't real columns. Controllers commonly forward the
+    // whole query string into `where` (const {page,pageSize,...where}=req.query),
+    // so junk params (pageNumber, itemsPerPage, _t cache-busters, etc.) would
+    // otherwise produce "no such column" 500s. A mock server should be forgiving:
+    // ignore unknown filters rather than crash the list endpoint.
+    const cols = this.tableColumns();
+    if (cols.size > 0) {
+      const filtered: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(where)) if (cols.has(k)) filtered[k] = v;
+      where = filtered;
+      if (Object.keys(where).length === 0) return { clause: '', params: [] };
     }
 
     const conditions: string[] = [];
@@ -257,7 +308,7 @@ export class BaseModel {
     const rows = sqlite.prepare(dataSql).all(...whereParams, pageSize, offset) as Record<string, unknown>[];
 
     return {
-      list: rows,
+      list: rows.map(r => this.hydrateRow(r)),
       total,
       page,
       pageSize,
@@ -267,7 +318,7 @@ export class BaseModel {
   findById(id: number): Record<string, unknown> | null {
     const tableName = this.getTableName();
     const row = sqlite.prepare(`SELECT * FROM \`${tableName}\` WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
-    return row ?? null;
+    return this.hydrateRow(row ?? null);
   }
 
   create(data: Record<string, unknown>): Record<string, unknown> {

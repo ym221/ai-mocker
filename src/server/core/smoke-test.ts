@@ -16,6 +16,7 @@ import { pathToFileURL } from 'url';
 import { sqlite } from './database.js';
 import { mockContext } from './base-model.js';
 import { getEntities, type MetaEndpoint } from './meta-schema.js';
+import { resolveHandlerName, candidateHandlerNames, type DispatchEndpoint } from './handler-dispatch.js';
 
 const GENERATED_DIR = resolve('generated');
 
@@ -116,29 +117,18 @@ function dispatchHandler(
   // 关键:**不要**在这里包 mockContext.run。外层 runSmokeTest 已经 `mockContext.run({ userId }, ...)`
   // 包了正确 userId;AsyncLocalStorage 嵌套时内层会覆盖外层,如果这里包 userId=0
   // 会导致 controller 里 new BaseModel(...) 拼出 mock__0_<table> 永远找不到表。
-  const named = (endpoint as any).controller;
-  if (named && typeof ctrl[named] === 'function') {
-    return ctrl[named](req);
-  }
-  switch (endpoint.type) {
-    case 'list':
-      if (typeof ctrl.list === 'function') return ctrl.list(req);
-      break;
-    case 'detail':
-      if (typeof ctrl.getById === 'function') return ctrl.getById(req);
-      break;
-    case 'custom': {
-      const handlerName = (endpoint as any).handler ?? endpoint.name;
-      if (handlerName && typeof ctrl[handlerName] === 'function') {
-        return ctrl[handlerName](req);
-      }
-      break;
-    }
-  }
-  // Last resort: try common method names
-  if (typeof ctrl.list === 'function') return ctrl.list(req);
-  if (typeof ctrl.getById === 'function') return ctrl.getById(req);
-  throw new Error(`Cannot dispatch handler for endpoint type="${endpoint.type}" path="${endpoint.path}". No matching export found.`);
+  //
+  // Use the SAME resolver as the live mock-router. Previously this had its own
+  // weaker dispatch (only ctrl.list/getById), so it false-failed multi-entity
+  // modules whose exports follow <verb><Entity> (listProducts/getStats/payOrder) —
+  // the smoke gate would reject modules the router actually serves fine.
+  const name = resolveHandlerName(ctrl, endpoint as DispatchEndpoint);
+  if (name) return ctrl[name](req);
+  throw new Error(
+    `Cannot dispatch handler for endpoint type="${endpoint.type}" path="${endpoint.path}". `
+    + `Tried: [${candidateHandlerNames(endpoint as DispatchEndpoint).join(', ')}]. `
+    + `Available exports: [${Object.keys(ctrl).filter(k => typeof ctrl[k] === 'function').join(', ') || '(none)'}].`,
+  );
 }
 
 function validateResponse(result: unknown): { valid: boolean; statusCode: number; reason?: string } {

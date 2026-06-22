@@ -24,10 +24,14 @@ await app.register(multipart, {
   },
 });
 
-// Rate limiting for API routes
+// Rate limiting for API routes.
+// Loopback is allow-listed: run_test drives the generated test suite by firing many
+// /mock requests from 127.0.0.1, which would otherwise trip the limit and make the
+// suite fail with flaky 429s — trapping the generation loop (it can never reach all-green).
 await app.register(rateLimit, {
   max: process.env.NODE_ENV === 'production' ? 100 : 2000,
   timeWindow: '1 minute',
+  allowList: ['127.0.0.1', '::1', '::ffff:127.0.0.1'],
   keyGenerator: (request) => {
     return request.ip;
   },
@@ -115,13 +119,18 @@ app.setErrorHandler((err, request, reply) => {
     });
   }
 
-  // Default server error
+  // Default error.
+  // 4xx are client errors (validation / malformed body / bad content-type) — their
+  // messages are safe and actionable, so surface them even in production. Only 5xx
+  // (true server faults, may carry internals/stack) are masked in production.
+  const statusCode = err.statusCode || 500;
   app.log.error(err);
-  return reply.status(err.statusCode || 500).send({
+  const message = statusCode < 500 || process.env.NODE_ENV !== 'production'
+    ? err.message
+    : 'Internal server error';
+  return reply.status(statusCode).send({
     success: false,
-    message: process.env.NODE_ENV === 'production'
-      ? 'Internal server error'
-      : err.message,
+    message,
   });
 });
 

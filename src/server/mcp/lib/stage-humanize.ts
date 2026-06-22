@@ -38,6 +38,23 @@ function humanizeTool(toolName: string | undefined): string {
   return TOOL_LABEL[toolName] ?? `正在使用工具 ${toolName}`;
 }
 
+/**
+ * Honest "remaining time" phrase for still-running responses.
+ *
+ * The per-stage `expectedRemainingSec` is a static guess; once a run has clearly
+ * blown past one full wait window it's misleading to keep promising "~30s" (the
+ * earlier behavior, which printed the same tiny ETA at 180s, 360s, 720s...).
+ * Past ~one window, drop the fake ETA and set correct expectations: complex
+ * modules legitimately take several generate+self-test rounds.
+ */
+export function formatEtaPhrase(elapsedSec: number | undefined, info: StageInfo): string {
+  const e = elapsedSec ?? 0;
+  if (e >= 240) {
+    return `已持续 ${e}s — 复杂模块需多轮生成+自测,属正常,继续等待即可`;
+  }
+  return `预计再 ~${info.expectedRemainingSec}s 可完成`;
+}
+
 export function humanizeStage(rawStage: string | undefined | null): StageInfo {
   const s = rawStage ?? 'starting';
 

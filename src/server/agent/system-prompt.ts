@@ -79,10 +79,12 @@ moduleName 优先从用户消息提取;没明示则自己想 snake_case 英文�
 \`emit_params({ moduleName, fieldNaming, envelope, entities, endpoints, pagination? })\`
 
 要点:
-- **fieldNaming**:看 spec 用什么风格(snake_case / camelCase / PascalCase)
+- **fieldNaming**:按 spec 字段 token 推断 —— **只要出现一个驼峰字段(如 \`createdAt\`/\`viewCount\`)就整体用 camelCase**(别因其他字段是单个小写单词就退回 snake);出现 \`author_id\` 这类下划线则 snake_case;两者都没有才默认 snake_case。判定后 schema.sql 列名 / _meta field.name / API 响应字段三处必须同风格一致,不准把 spec 的 camelCase 字段擅自落成 snake(否则响应契约跟用户给的字段名对不上)。
 - **envelope.default**:默认信封各字段名,如 spec 用 \`{ Success, Message, Data, paginationInfo }\` → \`{ successFlag: "Success", dataField: "Data", messageField: "Message", paginationField: "paginationInfo" }\`
 - **envelope.exceptions**:某端点用例外信封(如 spec 说"API-007 用 IsSuccess")就列出
 - **entities**:所有实体 + primaryKey(name/type/autoIncrement)+ fields(含 enum/required/min/max/pattern)+ seedCount(spec 提"种子 N 条"必填)
+  - **数组/对象字段**(如 tags 标签数组、items 订单项数组):field.type 用 \`array\`(或 \`json\`),schema.sql 里对应列声明成 \`TEXT\`。框架写入时自动 JSON 序列化、读取时自动解析回数组/对象 —— controller 里 \`create({ tags: ['a','b'] })\` 直接传数组即可,**不要手动 JSON.stringify/parse**,响应里也会是真数组而不是字符串。
+  - **实体表名唯一**:同一用户名下不同模块的实体 tableName 不能重复(表按用户共享,重名会互相覆盖)。多模块场景给 tableName 加模块前缀(如 \`mock__<moduleName>_<entity>\`)。
 - **endpoints**:每个端点 method/path/type/entity + customLogic(纯 CRUD 留空,非纯 CRUD 用一句话描述,如"按 supplierHotelCode 查 SupplierHotel 自动带出 supplierId/supplierName 落库")
 - **pagination**(可选):分页字段名 + position(flat/nested),如 spec 用 \`paginationInfo: { pageNumber, itemsPerPage }\` → \`{ pageField:"pageNumber", pageSizeField:"itemsPerPage", position:"nested", nestedKey:"paginationInfo" }\`
 

@@ -19,6 +19,7 @@ import { providers, presets, sessions, messages, modules, messageEvents } from '
 import { decrypt } from '../core/encryption.js';
 import { computeModuleHealth, probeControllerLoadable } from '../core/module-health.js';
 import { runSmokeTest, type SmokeResult } from '../core/smoke-test.js';
+import { checkTestFileParses } from './tools/run-test.js';
 import { resolveDefaultProviderForUser, findAccessibleProvider } from '../core/provider-resolver.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { buildTools, buildToolsForNudge, buildToolsForReadOnly, isRepairCapReached, getRepairAttempts } from './tool-registry.js';
@@ -1273,6 +1274,15 @@ export class ChatRunner {
             console.warn(`[chat-runner] runSmokeTest threw for ${mn}:`, smokeErr);
             this.softWarnings.push('smoke test failed to run (internal error) — module may or may not be working');
           }
+
+          // (d) 轻量 test.ts 语法检查 — 截断/损坏的自带测试会过 smoke(smoke 只调
+          // controller),却让用户之后 run_test 直接编译失败。这里提前抓出来转成 warning。
+          try {
+            const parseChk = await checkTestFileParses(userId, mn);
+            if (!parseChk.ok) {
+              this.softWarnings.push(`自带测试文件 test.ts 存在语法错误(${parseChk.error}),run_test 暂不可用 — 可调用 update_module 让我修复测试文件`);
+            }
+          } catch { /* 语法检查本身绝不阻断 finalize */ }
         }
 
         sqlite.prepare(`UPDATE messages SET content = ? WHERE id = ?`)

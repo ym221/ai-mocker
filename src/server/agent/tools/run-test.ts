@@ -91,3 +91,34 @@ export async function runTest(userId: number, moduleName: string): Promise<{
     globalThis.fetch = originalFetch;
   }
 }
+
+/**
+ * Lightweight syntax check: does test.ts actually transpile/parse?
+ *
+ * A weak model can emit a truncated test.ts (token cut-off → "Unexpected end of
+ * file"). Smoke-test passes (it only calls a controller), so the broken self-test
+ * ships silently and only fails when the user later calls run_test. Running this
+ * at finalize lets us surface it as a warning instead.
+ *
+ * Does NOT execute the tests — just imports the file (tsx transpiles via esbuild;
+ * a malformed file rejects). Resets the test registry before+after to mirror
+ * runTest's own handling and not leak registrations.
+ */
+export async function checkTestFileParses(userId: number, moduleName: string): Promise<{ ok: boolean; error?: string }> {
+  const testPath = join(GENERATED_DIR, String(userId), moduleName, 'test.ts');
+  if (!existsSync(testPath)) return { ok: true };
+  resetTests();
+  try {
+    await import(pathToFileURL(testPath).href + `?syntax=${Date.now()}`);
+    return { ok: true };
+  } catch (e) {
+    const raw = e instanceof Error ? e.message : String(e);
+    // esbuild puts the useful bit ("...test.ts:140:3: ERROR: Unexpected end of file")
+    // on a line after the "Transform failed" header — surface that line if present.
+    const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+    const detail = lines.find(l => /ERROR:/.test(l)) ?? lines[0] ?? raw;
+    return { ok: false, error: detail.replace(/^.*test\.ts:/, 'test.ts:') };
+  } finally {
+    resetTests();
+  }
+}

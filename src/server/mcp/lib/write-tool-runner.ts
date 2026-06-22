@@ -31,6 +31,7 @@ import { tryAcquire, release } from './concurrency-gate.js';
 import { instructionsDiffer } from './instruction-utils.js';
 import { MCP_ERROR_CODES, mcpError } from './error-codes.js';
 import { humanizeStage } from './stage-humanize.js';
+import { runSmokeTest } from '../../core/smoke-test.js';
 
 const DEFAULT_WAIT_MAX_SEC = 180;  // 3 min, aligned with real-LLM tool-call cadence
 const MAX_WAIT_MAX_SEC = 300;
@@ -204,7 +205,7 @@ export async function runWriteTool(ctx: WriteToolContext): Promise<any> {
         return ctx.buildStillRunningResponse({ result, attached: true, driftWarning, actualInstruction });
       }
       if (result.status !== 'done') {
-        return defaultNonDone(ctx, { result, attached: true });
+        return await nonDoneOrSalvage(ctx, { result, attached: true });
       }
       // Phantom-success guard: registered + 5 files
       if (ctx.toolKind === 'create' && ctx.moduleName) {
@@ -292,7 +293,7 @@ export async function runWriteTool(ctx: WriteToolContext): Promise<any> {
     return ctx.buildStillRunningResponse({ result, attached: false, driftWarning: null, actualInstruction: null });
   }
   if (result.status !== 'done') {
-    return defaultNonDone(ctx, { result, attached: false });
+    return await nonDoneOrSalvage(ctx, { result, attached: false });
   }
   // Phantom-success guard: registered + 5 files
   if (ctx.toolKind === 'create' && ctx.moduleName) {
@@ -348,6 +349,54 @@ const REQUIRED_MODULE_FILES = ['_meta.json', 'schema.sql', 'controller.ts', 'tes
 function listMissingFiles(userId: number, moduleName: string): string[] {
   const dir = join(resolve('generated'), String(userId), moduleName);
   return REQUIRED_MODULE_FILES.filter(f => !existsSync(join(dir, f)));
+}
+
+/** Resolve the module name from card events (create may not pre-specify it). */
+function resolveModuleNameFromEvents(events: any[]): string | null {
+  for (const ev of events || []) {
+    const d = (ev?.payload as any)?.data?.moduleName ?? (ev?.payload as any)?.moduleName;
+    if (ev?.type === 'card' && d) return d as string;
+  }
+  return null;
+}
+
+/**
+ * Non-done salvage (Step-Loosen follow-up).
+ *
+ * A session can end as error / aborted / timeout while having already written a
+ * complete, loadable module — e.g. the model kept iterating past the time budget,
+ * or threw a late non-fatal error after the files were on disk. Hard-failing in
+ * that case throws away a usable module and forces a full regenerate.
+ *
+ * Instead: if the module is registered, has all 5 files, and passes the smoke
+ * test (one real endpoint call returns valid JSON), return it as a success with a
+ * warning. The caller can then refine remaining details via update_module — which
+ * matches the "deliver something usable, polish conversationally" model. Only when
+ * the module is genuinely not usable do we surface the hard error.
+ */
+async function nonDoneOrSalvage(ctx: WriteToolContext, args: NonDoneArgs): Promise<any> {
+  const { result, attached } = args;
+  const moduleName = ctx.moduleName ?? resolveModuleNameFromEvents(result.events);
+  if (
+    moduleName
+    && moduleIsRegistered(ctx.userId, moduleName)
+    && listMissingFiles(ctx.userId, moduleName).length === 0
+  ) {
+    let smokeOk = false;
+    try {
+      const smoke = await runSmokeTest(ctx.userId, moduleName);
+      smokeOk = smoke.passed || smoke.skipped;
+    } catch { smokeOk = false; }
+    if (smokeOk) {
+      const salvage =
+        `本次生成会话以 ${result.status} 状态结束(可能超时或中途报错),但模块 "${moduleName}" 已成功落盘且基本可调用。`
+        + `若仍有未完善的细节,直接用 update_module 描述要补的地方继续完善即可,无需从头重建。`;
+      return ctx.buildSuccessResponse({
+        result, attached, driftWarning: salvage, actualInstruction: null, resolvedModuleName: moduleName,
+      });
+    }
+  }
+  return defaultNonDone(ctx, args);
 }
 
 function defaultNonDone(ctx: WriteToolContext, args: NonDoneArgs): any {

@@ -52,7 +52,11 @@ function bumpRepairAttempt(sessionId: string, cause: string): number {
 // Step-Loosen Phase 2.5:per-cause hard cap.
 // 超过这个数,observability emit 一条 'repair_cap_reached' 事件,
 // 让 AI 在下次思考时看到 system 提示自己 stop 修同类问题(由 chat-runner 注入)。
-const REPAIR_HARD_CAP_PER_CAUSE = Math.max(1, Number(process.env.CHAT_REPAIR_HARD_CAP ?? 2));
+// 4 (was 2): complex multi-endpoint modules routinely surface 2-3 distinct
+// controller bugs across separate run_test rounds; a cap of 2 force-stopped the
+// model mid-repair with cases still red. 4 gives enough budget to converge while
+// still bounding runaway loops. Override via CHAT_REPAIR_HARD_CAP.
+const REPAIR_HARD_CAP_PER_CAUSE = Math.max(1, Number(process.env.CHAT_REPAIR_HARD_CAP ?? 4));
 export function getRepairAttempts(sessionId: string, cause: string): number {
   return repairAttempts.get(sessionId)?.get(cause) ?? 0;
 }
@@ -213,7 +217,7 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         + 'moduleName 优先从用户消息里提取(如"模块名: xxx" / "create xxx module");'
         + '用户没明示就**你自己想一个**snake_case 英文名(基于业务关键词,如"订单管理"→ "order"、'
         + '"直签酒店财务"→ "hotel_finance")。**不要传空字符串**。',
-      parameters: z.object({
+      inputSchema: z.object({
         moduleName: z.string().optional().describe('Module name (英文 snake_case)。可省略 — 框架会从用户消息推断;推断失败会报错让你重试时显式提供'),
         operation: z.enum(['create', 'edit']).optional().describe('create = 新建模块; edit = 修改已有模块。可省略 — 框架按模块是否存在自动判断'),
       }),
@@ -260,7 +264,7 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         + '  - entities:所有实体 + 主键 + 字段 + seedCount(种子数,spec 提了就填)\n'
         + '  - endpoints:每个端点的 method/path/type/entity + customLogic(纯 CRUD 留空,非 CRUD 用一句话描述业务逻辑)\n'
         + '  - pagination(可选):分页字段名 + 位置(flat 顶层 vs nested 包在 paginationInfo 里)',
-      parameters: paramsSchema,
+      inputSchema: paramsSchema,
       execute: async (input) => {
         const result = emitParams(input);
         if (!result.success) return result;
@@ -274,7 +278,7 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         + 'SQL files auto-execute; _meta.json auto-syncs to modules table. For efficient multi-file writes (5-6 files at once), prefer `write_files` — but if you struggle with its nested schema, fall back to calling `write_file` once per file. '
         + '`content` accepts string OR object/array (will be auto-JSON.stringify-ed) — emit native JSON for _meta.json if more natural.\n\n'
         + '**禁用条件**:进入修复阶段(run_test 已调过)后,本工具被锁定。修 bug 必须用 patch_file 局部修改。',
-      parameters: z.object({
+      inputSchema: z.object({
         path: z.string().describe('File path relative to generated/{userId}/, e.g., "order/_meta.json"'),
         // content 接受 string | object | array:LLM 写 _meta.json 时经常自然 emit object,
         // 强制 string 会让 zod 在 LLM 第一次调用必失败 1 次。框架在这里 normalize 一次性吸收。
@@ -312,7 +316,7 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         + 'If you attempt this and get "no files provided" errors, switch to `write_file` (single-file) instead. '
         + 'Each file\'s `content` accepts string OR object/array (auto-stringified). '
         + '`files` itself also accepts stringified JSON (framework auto-parses).',
-      parameters: z.object({
+      inputSchema: z.object({
         files: z.preprocess(
           parseIfStringified,
           z.array(z.object({
@@ -350,7 +354,7 @@ export function buildTools(userId: number, runner?: ChatRunner) {
 
     read_file: tool({
       description: 'Read a file from generated/{userId}/ directory.',
-      parameters: z.object({
+      inputSchema: z.object({
         path: z.string().describe('File path relative to the module directory, e.g., "order/controller.ts"'),
       }),
       execute: async ({ path }) => {
@@ -366,7 +370,7 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         + '  - reason 必填,说明改什么 + 为什么\n'
         + '修 SQL 时框架会重新 exec(CREATE IF NOT EXISTS + INSERT OR IGNORE 是幂等的);修 _meta.json 会重新合约校验 + 同步到 modules 表。\n'
         + '若 patch 超过比例上限,意味着思路根本变了 — 拆成多次小 patch,每次只动一处。',
-      parameters: z.object({
+      inputSchema: z.object({
         path: z.string().describe('文件路径(同 write_file 规则,如 "order/controller.ts")'),
         oldText: z.string().describe('要替换的精确片段(包括空格/换行)。必须在文件中唯一出现 1 次'),
         newText: z.string().describe('替换后的新片段'),
@@ -384,7 +388,7 @@ export function buildTools(userId: number, runner?: ChatRunner) {
 
     run_test: tool({
       description: 'Execute test.ts for a module. Clears test data first, then runs all test cases.',
-      parameters: z.object({
+      inputSchema: z.object({
         moduleName: z.string().describe('Module name to test'),
       }),
       execute: async ({ moduleName }) => {
@@ -409,7 +413,7 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         + 'CRITICAL: If user asks to modify the Nth record / a specific record, the correct flow is\n'
         + '  list({ page:1, pageSize:N }) → pick id → update({ id, data: { field: newValue } }).\n'
         + 'NEVER use clear + bulk_generate + insert as a substitute for update — it destroys other rows.',
-      parameters: z.object({
+      inputSchema: z.object({
         action: z.enum(['list', 'insert', 'update', 'delete', 'batch_delete', 'clear', 'bulk_generate']).describe('Operation to perform'),
         moduleName: z.string().describe('Module name'),
         data: z.preprocess(parseIfStringified, z.record(z.string(), z.unknown()).optional())
@@ -432,7 +436,7 @@ export function buildTools(userId: number, runner?: ChatRunner) {
 
     list_modules: tool({
       description: 'List all modules owned by the current user.',
-      parameters: z.object({}),
+      inputSchema: z.object({}),
       execute: async () => {
         return listModules(userId);
       },
@@ -445,7 +449,7 @@ export function buildTools(userId: number, runner?: ChatRunner) {
         + 'using delete_module as an "undo" shortcut is destructive (it drops seed tables) '
         + 'and will leave the new files inconsistent. If you need to fix a bad generation, '
         + 'use write_files/write_file to overwrite or run_test to validate fixes.',
-      parameters: z.object({
+      inputSchema: z.object({
         moduleName: z.string().describe('Module name to delete'),
       }),
       execute: async ({ moduleName }) => {
@@ -468,7 +472,7 @@ export function buildTools(userId: number, runner?: ChatRunner) {
 
     get_module_template: tool({
       description: 'Fetch a complete file-by-file module sample when you need a reference for generating a new module. Kinds: "crud-basic" (minimal 5-file todo sample) or "with-constraints" (shows _meta.json field + cross-field constraints). Call this only if the user asks something you are unsure how to structure.',
-      parameters: z.object({
+      inputSchema: z.object({
         kind: z.enum(['crud-basic', 'with-constraints']).describe('Template flavor'),
       }),
       execute: async ({ kind }) => {

@@ -1,6 +1,6 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { resolve, join } from 'path';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { pathToFileURL } from 'url';
 import { mockContext } from './base-model.js';
 import { sqlite } from './database.js';
@@ -8,6 +8,71 @@ import { recordMockAccess } from './access-log.js';
 import { resolveHandlerName, candidateHandlerNames } from './handler-dispatch.js';
 
 const GENERATED_DIR = resolve('generated');
+const UPLOAD_DIR = resolve(process.env.UPLOAD_DIR || './uploads');
+
+/** A file uploaded to a mock endpoint, already persisted to disk and servable. */
+interface UploadedFile {
+  fieldname: string;
+  filename: string;
+  mimetype: string;
+  size: number;
+  /** Absolute disk path. */
+  path: string;
+  /** Full URL (origin + /uploads/...) — what a controller should return so clients can fetch the file. */
+  url: string;
+  /** Origin-relative URL (/uploads/...). */
+  relativeUrl: string;
+}
+
+/** Best-effort public origin of the request (honors X-Forwarded-* behind a proxy). */
+function originOf(request: FastifyRequest): string {
+  const proto = String(request.headers['x-forwarded-proto'] || request.protocol || 'http').split(',')[0].trim();
+  const host = String(request.headers['x-forwarded-host'] || request.headers.host || '127.0.0.1').split(',')[0].trim();
+  return `${proto}://${host}`;
+}
+
+/**
+ * Parse a multipart/form-data request: persist every file part under
+ * uploads/<userId>/<moduleName>/ (served by @fastify/static at /uploads/) and
+ * return the saved files plus the non-file form fields. This is what makes a
+ * mock upload endpoint REAL — the returned `url` actually serves the bytes.
+ */
+async function parseMultipart(
+  request: FastifyRequest,
+  userId: number,
+  moduleName: string,
+): Promise<{ fields: Record<string, unknown>; files: UploadedFile[] }> {
+  const fields: Record<string, unknown> = {};
+  const files: UploadedFile[] = [];
+  const origin = originOf(request);
+  const dir = join(UPLOAD_DIR, String(userId), moduleName);
+
+  // request.parts() is provided by @fastify/multipart (registered app-wide).
+  for await (const part of (request as any).parts()) {
+    if (part.type === 'file') {
+      const buffer = await part.toBuffer();
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const safe = String(part.filename || 'file').replace(/[^\w.\-]+/g, '_').slice(-100);
+      const rand = Math.random().toString(36).slice(2, 8);
+      const stored = `${Date.now()}-${rand}-${safe}`;
+      const diskPath = join(dir, stored);
+      writeFileSync(diskPath, buffer);
+      const relativeUrl = `/uploads/${userId}/${moduleName}/${stored}`;
+      files.push({
+        fieldname: part.fieldname,
+        filename: part.filename,
+        mimetype: part.mimetype,
+        size: buffer.length,
+        path: diskPath,
+        url: `${origin}${relativeUrl}`,
+        relativeUrl,
+      });
+    } else {
+      fields[part.fieldname] = part.value;
+    }
+  }
+  return { fields, files };
+}
 
 interface MetaEndpoint {
   method: string;
@@ -259,14 +324,25 @@ export default async function mockRouter(app: FastifyInstance) {
       const query = request.query as Record<string, string>;
       // Default to {} so controllers can always destructure body, even for body-less
       // requests (no Content-Type, or a method Fastify left unparsed).
-      const body = (request.body ?? {}) as Record<string, unknown>;
+      let body = (request.body ?? {}) as Record<string, unknown>;
+
+      // Multipart/form-data: persist uploaded files and expose them to the controller
+      // as req.files / req.file (each with a real, fetchable `url`). Non-file fields
+      // fold into body so the controller still sees them. This makes upload endpoints
+      // actually store + serve the file rather than returning a fake URL.
+      let files: UploadedFile[] = [];
+      if (typeof (request as any).isMultipart === 'function' && (request as any).isMultipart()) {
+        const parsed = await parseMultipart(request, userId, moduleName);
+        body = { ...parsed.fields };
+        files = parsed.files;
+      }
 
       // Controllers may be sync OR async; await unconditionally so the response
       // processing below (statusCode/__mock__ extraction) sees the resolved value,
       // never a Promise. Sync controllers are untouched by `await` on non-Promises.
       // 统一传 req-style `{ body, query, params }`,跟 named-handler 完全一致。
       // 这是 LLM 默认会写的 express-style 签名(claude-sonnet 等强模型实测都用这种)。
-      const req = { body, query, params: matchedParams };
+      const req = { body, query, params: matchedParams, files, file: files[0] ?? null };
 
       // Resolve the export via the shared resolver — recognizes explicit
       // _meta.endpoints[].controller plus the conventional <verb><Entity> /

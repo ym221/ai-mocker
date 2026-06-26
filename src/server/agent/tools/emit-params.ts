@@ -147,7 +147,12 @@ export function checkConsistency(params: ModuleParams): ConsistencyError[] {
   // primaryKey 字段必须在 fields 列表中(用户可声明 id 是 PK 但 fields 里也得列)
   // 或:PK 是 id INTEGER AUTOINCREMENT 时,fields 不强制包含(框架默认有 id)
   params.entities.forEach((entity, i) => {
-    const isDefaultId = entity.primaryKey.name === 'id'
+    // `Id`/`ID`/`id` INTEGER AUTOINCREMENT are all the default rowid-alias PK
+    // (SQLite column names are case-insensitive); PascalCase/camelCase specs name
+    // it `Id`, which must NOT be force-listed in fields. Match case-insensitively
+    // so a correct PascalCase intent isn't bounced — same root cause as the
+    // case-sensitive PK detection that broke BaseModel.create().
+    const isDefaultId = entity.primaryKey.name.toLowerCase() === 'id'
       && entity.primaryKey.type === 'INTEGER'
       && entity.primaryKey.autoIncrement;
     if (!isDefaultId) {
@@ -204,6 +209,20 @@ function coerceRawParams(raw: unknown): unknown {
   for (const key of ['envelope', 'entities', 'endpoints', 'pagination']) {
     if (typeof out[key] === 'string') {
       try { out[key] = JSON.parse(out[key]); } catch { /* leave for validation to report */ }
+    }
+  }
+  // Normalize primaryKey.type: models naturally write lowercase 'integer'/'int'/
+  // 'string'/'text' (the field `type` enum accepts those), but the PK type enum is
+  // uppercase ['INTEGER','TEXT']. Map case-insensitively so a correct intent isn't
+  // rejected on casing alone — both deepseek and sonnet burned rounds on this.
+  if (Array.isArray(out.entities)) {
+    for (const ent of out.entities) {
+      const pk = ent?.primaryKey;
+      if (pk && typeof pk.type === 'string') {
+        const t = pk.type.trim().toLowerCase();
+        if (['integer', 'int', 'number', 'bigint'].includes(t)) pk.type = 'INTEGER';
+        else if (['text', 'string', 'varchar', 'char', 'uuid'].includes(t)) pk.type = 'TEXT';
+      }
     }
   }
   return out;

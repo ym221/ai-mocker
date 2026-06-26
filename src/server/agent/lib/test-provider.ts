@@ -75,7 +75,7 @@ export async function testProvider(input: TestProviderInput): Promise<TestProvid
       tools: {
         echo: tool({
           description: 'Echo back a phrase',
-          parameters: z.object({
+          inputSchema: z.object({
             phrase: z.string().describe('Phrase to echo'),
           }),
           execute: async ({ phrase }) => ({ echoed: phrase }),

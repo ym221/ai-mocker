@@ -208,6 +208,28 @@ return { code: 0, data: [...], msg: 'ok' };                              // 阿�
 return { __mock__: { status: 303, headers: { Location: '/x' }, body: null } };  // 自定义 header/重定向
 \`\`\`
 
+## 文件上传接口(multipart/form-data)
+
+若某 endpoint 接收文件上传(spec 里 requestBody 是 \`multipart/form-data\` + 某字段 \`format: binary\`):
+- **框架已自动解析并把文件存盘**。controller 的 \`req\` 多两个字段:\`req.files\`(数组)与 \`req.file\`(第一个文件的便捷引用,无文件时为 null)。每个文件含 \`{ fieldname, filename, mimetype, size, url, path }\`,其中 **\`url\` 是可直接访问的完整 URL**(框架已通过静态服务暴露真实文件)。
+- controller **必须返回 \`req.file.url\`**(按 spec 的信封包裹),**禁止**返回假占位 URL(如 picsum / example.com)。例:
+  \`\`\`ts
+  export const uploadImage = async (req) => {
+    if (!req.file) return { Code: -1, Success: false, Message: '未收到文件', Data: null };
+    return { Code: 0, Success: true, Message: '', Data: req.file.url };  // 真实可访问的上传文件 URL
+  };
+  \`\`\`
+- endpoint.type 用 \`custom\`;schema.sql 不需要为上传文件建列(除非要持久化文件记录)。
+- **test.ts 必须真正验证上传链路**:用 \`request.upload(path, { field:'img', filename:'x.png', content:'hello' })\` 发起上传拿到 url,再用 \`request.getFile(url)\` 断言 \`status===200\`(证明文件真存下来且可读取)。例:
+  \`\`\`ts
+  test('POST /update_image - 上传并可访问', async () => {
+    const res = await request.upload('/mock/<module>/update_image', { field: 'img', filename: 'b.png', content: 'PNGDATA' });
+    assert.equal(res.body.Code, 0);
+    const fileRes = await request.getFile(res.body.Data);
+    assert.equal(fileRes.status, 200);
+  });
+  \`\`\`
+
 ---
 
 # 决策对账(调第一次 write_files 之前**必须**在 thinking 里做)

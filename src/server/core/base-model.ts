@@ -61,10 +61,30 @@ function normalizeOrderBy(raw: OrderByInput | undefined, defaultClause: string):
   if (raw == null) return defaultClause;
   const SAFE = /^[A-Za-z_][A-Za-z0-9_]*$/;
   const parts: string[] = [];
+  const isDir = (v: unknown): boolean => typeof v === 'string' && /^(asc|desc)$/i.test(v.trim());
   const pushPair = (col: string, dirRaw: OrderByValue) => {
     if (!SAFE.test(col)) return;  // 静默丢弃不安全列名,绝不拼进 SQL
     const dir = String(dirRaw).toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
     parts.push(`\`${col}\` ${dir}`);
+  };
+  // Sequelize/TypeORM-style explicit shape some models emit:
+  //   { field: 'Sort', dir: 'ASC' } / { column: 'x', direction: 'DESC' } / { col, order }
+  // The column name lives under a col-key (value is NOT asc/desc); direction under a
+  // dir-key (value IS asc/desc). Restricted to field/column/col so a legit
+  // `{ name: 'DESC' }` (order by column `name`) is NOT misread.
+  const COL_KEYS = ['field', 'column', 'col'];
+  const DIR_KEYS = ['dir', 'direction', 'order', 'sortdir', 'sortDirection'];
+  const tryFieldDirForm = (obj: Record<string, unknown>): boolean => {
+    const colKey = COL_KEYS.find(k => typeof obj[k] === 'string' && !isDir(obj[k]));
+    if (!colKey) return false;
+    const dirKey = DIR_KEYS.find(k => isDir(obj[k]));
+    pushPair(String(obj[colKey]), (dirKey ? obj[dirKey] : 'ASC') as OrderByValue);
+    return true;
+  };
+  const handleObj = (obj: Record<string, unknown>) => {
+    if (tryFieldDirForm(obj)) return;
+    // plain { column: 'ASC'|'DESC' } map
+    for (const [k, v] of Object.entries(obj)) pushPair(k, v as OrderByValue);
   };
   const handleStr = (s: string) => {
     // 'createdAt DESC' / 'createdAt'
@@ -75,12 +95,11 @@ function normalizeOrderBy(raw: OrderByInput | undefined, defaultClause: string):
   else if (Array.isArray(raw)) {
     for (const item of raw) {
       if (typeof item === 'string') handleStr(item);
-      else if (item && typeof item === 'object') {
-        for (const [k, v] of Object.entries(item)) pushPair(k, v);
-      }
+      else if (Array.isArray(item)) pushPair(String(item[0]), (item[1] ?? 'ASC') as OrderByValue);  // [['Sort','ASC']]
+      else if (item && typeof item === 'object') handleObj(item as Record<string, unknown>);
     }
   } else if (typeof raw === 'object') {
-    for (const [k, v] of Object.entries(raw)) pushPair(k, v);
+    handleObj(raw as Record<string, unknown>);
   }
   return parts.length > 0 ? `ORDER BY ${parts.join(', ')}` : defaultClause;
 }
@@ -332,12 +351,20 @@ export class BaseModel {
     //   - 非 ROWID alias 的 PK → lastInsertRowid = 0
     const pragmaCols = sqlite.prepare(`PRAGMA table_info(\`${tableName}\`)`).all() as Array<{ name: string; type: string; pk: number; notnull: number }>;
     const pkCols = pragmaCols.filter(c => c.pk > 0).sort((a, b) => a.pk - b.pk);
+    // A single INTEGER PRIMARY KEY is a rowid alias regardless of the column-name
+    // case. PascalCase / camelCase specs name it `Id`/`ID`, which is still an
+    // autoincrement alias — SQLite column names are case-insensitive — so compare
+    // case-insensitively. Missing this sent `Id` PKs down the composite-PK branch,
+    // where `SELECT ... WHERE Id = ?` bound the (absent) caller-supplied id and
+    // returned a row with no PK, so create() handed back an Id-less object.
     const isIdRowidAlias =
-      pkCols.length === 1 && pkCols[0].name === 'id' && /INTEGER/i.test(pkCols[0].type);
+      pkCols.length === 1 && pkCols[0].name.toLowerCase() === 'id' && /INTEGER/i.test(pkCols[0].type);
 
     if (isIdRowidAlias) {
-      // 经典 AUTOINCREMENT 路径:用户不能传 id;lastInsertRowid 是正确 PK
+      // 经典 AUTOINCREMENT 路径:用户不能传 id;lastInsertRowid 是正确 PK。
+      // 按真实列名(可能是 Id/ID)删除,避免误传主键覆盖自增。
       delete cleanData.id;
+      delete cleanData[pkCols[0].name];
     }
 
     this.maybeValidate(cleanData, 'create');

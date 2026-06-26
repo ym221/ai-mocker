@@ -143,6 +143,14 @@ const GUIDE_MARKDOWN = `# MockForge MCP
 - 优先读 \`structuredContent\`(机读),\`content[0].text\` 是给人看的
 - \`dry_run:true\` → 只解析校验不落地,先确认再真跑
 
+## 文件上传(真实存取,非假 URL)
+
+Mock 模块**支持真正的文件上传**。spec 里把上传端点写成 \`multipart/form-data\` + 某字段 \`format: binary\`(如 \`{ img: { type: string, format: binary } }\`),框架会:
+- 接收并**把文件真正存盘**(\`uploads/<userId>/<moduleName>/\`),通过静态服务暴露;
+- 返回一个**真实可访问的 URL** —— 业务代码 / 浏览器 GET 这个 URL 能拿回**原始上传的字节**(content-type 也保留),不是占位图。
+
+所以你可以放心在 spec 里包含"上传图片/附件并返回 url"这类端点,生成出来就是能用的:前端上传 → 拿到 url → 写进别的记录 → 再访问该 url 读回文件,全链路通。无需自己实现存储。
+
 ## 接入业务代码
 
 直接用 \`mockBaseUrl\` 拼端点 path 即可,**完全无需带身份信息**:
